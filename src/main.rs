@@ -1,16 +1,20 @@
-use std::{error::Error, io, process, fs::File};
+use std::{error::Error, fs::File, sync::Mutex, collections::HashSet};
 
 use chrono::NaiveDateTime;
 use csv::Reader;
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::time::Instant;
+
+static DIFF: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| {
+    Mutex::new(HashSet::new())
+});
 
 #[derive(Debug)]
 pub struct Row {
     pub time: NaiveDateTime,
-    pub field: String,
     pub sensor: Sensor,
-    pub value: f32,
+    pub value: SensorValue,
 }
 
 #[derive(Debug)]
@@ -23,6 +27,35 @@ pub enum Sensor {
     U11,
     U3a,
     Zbornica,
+}
+
+#[derive(Debug)]
+pub enum SensorValue {
+    DewPoint(f32),
+    Luminance(f32),
+    VocIndex(f32),
+    Co2(f32),
+    AbsHumidity(f32),
+    Rh(f32),
+    Temperature(f32),
+    VecEqCo2(f32),
+}
+
+#[derive(Debug)]
+pub struct TargetRow {
+    jan: bool,
+    feb: bool,
+    mar: bool,
+    apr: bool,
+    may: bool,
+    jun: bool,
+    jul: bool,
+    aug: bool,
+    sep: bool,
+    oct: bool,
+    nov: bool,
+    dec: bool,
+    day: i8,
 }
 
 impl Row {
@@ -68,20 +101,36 @@ impl Row {
             },
             None => return Err("value parse err".to_string().into()),
         };
-        
+        let value = match map_sensor_value(field, value) {
+            Ok(v) => v,
+            Err(e) => return Err(format!("sensor value parse err: {:#?}", e).into()),
+        };
         Ok(Self { 
             time,
-            field, 
             sensor, 
             value, 
         })
     }
 }
 
+fn map_sensor_value(field: String, value: f32) -> Result<SensorValue, Box<dyn Error>> {
+    match field.as_str() {
+        "dew_point" => Ok(SensorValue::DewPoint(value)),
+        "luminance" => Ok(SensorValue::Luminance(value)),
+        "voc_index" => Ok(SensorValue::VocIndex(value)),
+        "co2" => Ok(SensorValue::Co2(value)),
+        "abs_humidity" => Ok(SensorValue::AbsHumidity(value)),
+        "RH" => Ok(SensorValue::Rh(value)),
+        "temperature" => Ok(SensorValue::Temperature(value)),
+        "voc_eq_co2" => Ok(SensorValue::VecEqCo2(value)),
+        _ => Err("can't map sensor value".into()),
+    }
+}
+
 fn main() {
     
     let now = Instant::now();
-    let reader = match read_csv("../data/apr_maj_jun_ajdovscina_iaq.csv") {
+    let reader = match read_csv("data/apr_maj_jun_ajdovscina_iaq.csv") {
         Ok(r) => r,
         Err(e) => return println!("Something went worng reading csv: {:#?}", e),
     };
@@ -113,7 +162,10 @@ fn main() {
         }; 
     });
 
-
+    {
+        let diff = DIFF.lock().unwrap();
+        println!("diff: {:#?}", diff);
+    }
     let elapsed = now.elapsed();
     println!("Elapsed: {:.2?}", elapsed);
 }
