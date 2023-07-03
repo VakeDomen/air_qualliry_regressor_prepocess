@@ -5,8 +5,9 @@ use csv::Reader;
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::time::Instant;
+use dashmap::DashMap;
 
-static LOCATION_DATA: Lazy<Mutex<HashMap<Sensor, Vec<LocationRow>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static LOCATION_DATA: Lazy<Mutex<HashMap<Sensor, Vec<SensedPeople>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 static  DATA: Lazy<Mutex<HashMap<Sensor, Vec<TargetRow>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -61,18 +62,17 @@ pub struct TargetRow {
 }
 
 #[derive(Debug)]
-pub struct LocationRow {
-    date: NaiveDateTime,
+pub struct SensedPeople {
     sensor: Sensor,
     people: i32,
 }
-impl LocationRow {
+impl SensedPeople {
     pub fn from(
         date: Option<&str>,
         time: Option<&str>,
         room: Option<&str>,
         people: Option<&str>
-    ) -> Result<Vec<LocationRow>, Box<dyn Error>> {
+    ) -> Result<Vec<(NaiveDateTime, SensedPeople)>, Box<dyn Error>> {
         let times: Vec<NaiveDateTime> = match parse_location_times(date, time) {
             Ok(t) => t,
             Err(e) => return Err(format!("Error paring times for location: {:#?}", e).into()),
@@ -92,13 +92,15 @@ impl LocationRow {
             times
                 .into_iter()
                 .map(|t| {
-                    LocationRow {
-                        date: t,
-                        sensor: sensor.clone(),
-                        people: people.clone(),
-                    }
+                    (
+                        t,
+                        SensedPeople {
+                            sensor: sensor.clone(),
+                            people: people.clone(),
+                        }
+                    )
                 })
-                .collect::<Vec<LocationRow>>()
+                .collect::<Vec<(NaiveDateTime, SensedPeople)>>()
         )
     }
 }
@@ -244,7 +246,7 @@ fn main() {
     };
 
     let data = parse_location_data(location_data_reader);
-
+    // println!("{:#?}", data);
     let records: Vec<_> = reader.into_records().collect();
 
     records.par_iter().for_each(|r| {
@@ -273,37 +275,42 @@ fn main() {
     println!("Elapsed: {:.2?}", elapsed);
 }
 
-fn parse_location_data(reader: Reader<File>) -> Result<Vec<LocationRow>, Box<dyn Error>> {
-    Ok(
-        reader
-            .into_records()
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            .filter_map(|r| {
-                let row_record = match r {
-                    Ok(row) => row,
-                    Err(e) => {
-                        println!("Something went wrong reading row: {:#?}", e);
-                        return None;
-                    },
-                };
-                let row = match LocationRow::from(
-                    row_record.get(1),
-                    row_record.get(3),
-                    row_record.get(5),
-                    row_record.get(9)
-                ) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        println!("error parsing row: {:#?}", e);
-                        return None;
-                    },
-                };
-                Some(row)
-            })
-            .flatten()
-            .collect::<Vec<LocationRow>>()
-    )
+fn parse_location_data(reader: Reader<File>) -> Result<DashMap<NaiveDateTime, Vec<SensedPeople>>, Box<dyn Error>> {
+    let data = DashMap::new();
+    
+    reader
+        .into_records()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .for_each(|r| {
+            let row_record = match r {
+                Ok(row) => row,
+                Err(e) => {
+                    println!("Something went wrong reading row: {:#?}", e);
+                    return;
+                },
+            };
+            let row = match SensedPeople::from(
+                row_record.get(1),
+                row_record.get(3),
+                row_record.get(5),
+                row_record.get(10)
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("error parsing row: {:#?}", e);
+                    return;
+                },
+            };
+            
+            for (datetime, sensed_person) in row {
+                data.entry(datetime)
+                    .or_insert_with(Vec::new)
+                    .push(sensed_person);
+            }
+        });
+    
+    Ok(data)
 }
 
 
