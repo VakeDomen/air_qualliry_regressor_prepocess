@@ -1,14 +1,14 @@
-use std::{error::Error, fs::File, sync::Mutex, collections::HashSet};
+use std::{error::Error, fs::File, sync::Mutex, collections::{HashSet, HashMap}, str::FromStr, ops::Add};
 
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Timelike, Duration};
 use csv::Reader;
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::time::Instant;
 
-static DIFF: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| {
-    Mutex::new(HashSet::new())
-});
+static LOCATION_DATA: Lazy<Mutex<HashMap<Sensor, Vec<LocationRow>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+static  DATA: Lazy<Mutex<HashMap<Sensor, Vec<TargetRow>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug)]
 pub struct Row {
@@ -17,7 +17,9 @@ pub struct Row {
     pub value: SensorValue,
 }
 
-#[derive(Debug)]
+
+
+#[derive(Debug, Clone)]
 pub enum Sensor {
     U4c,
     Jedilnica,
@@ -56,6 +58,106 @@ pub struct TargetRow {
     nov: bool,
     dec: bool,
     day: i8,
+}
+
+#[derive(Debug)]
+pub struct LocationRow {
+    date: NaiveDateTime,
+    sensor: Sensor,
+    people: i32,
+}
+impl LocationRow {
+    pub fn from(
+        date: Option<&str>,
+        time: Option<&str>,
+        room: Option<&str>,
+        people: Option<&str>
+    ) -> Result<Vec<LocationRow>, Box<dyn Error>> {
+        let times: Vec<NaiveDateTime> = match parse_location_times(date, time) {
+            Ok(t) => t,
+            Err(e) => return Err(format!("Error paring times for location: {:#?}", e).into()),
+        };
+        let sensor = match parse_location_sensor(room) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Error paring sensors for location: {:#?}", e).into()),
+        };
+        let people = match people {
+            Some(p) => match p.parse::<i32>() {
+                Ok(p) => p,
+                Err(e) => return Err(format!("Error paring people for location: {:#?}", e).into()),
+            },
+            None => return Err(format!("Error paring peope for location-missing:").into()),
+        };
+        Ok(
+            times
+                .into_iter()
+                .map(|t| {
+                    LocationRow {
+                        date: t,
+                        sensor: sensor.clone(),
+                        people: people.clone(),
+                    }
+                })
+                .collect::<Vec<LocationRow>>()
+        )
+    }
+}
+
+fn parse_location_sensor(room: Option<&str>) -> Result<Sensor, Box<dyn Error>> {
+    match room {
+        Some(r) => match r {
+            "U11" => Ok(Sensor::U11),
+            "U18" => Ok(Sensor::Soba18),
+            "U3A" => Ok(Sensor::U3a),
+            "U4B" => Ok(Sensor::U4b),
+            "U4C" => Ok(Sensor::U4c),
+            _ => Err("Error parsing sensor on location".into()),
+        },
+        None => Err("Error parsing sensor on location - MISSING".into()),
+    }
+}
+
+fn parse_location_times(date: Option<&str>, time: Option<&str>) -> Result<Vec<NaiveDateTime>, Box<dyn Error>> {
+    let start_time = match get_start_time(date, time) {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Error finding statr time of a time-slot: {}", e).into()),
+    };
+
+    let slot_len_in_minutes = if start_time.hour() == 7 {
+        25
+    } else {
+        45
+    };
+    
+    let mut times = vec![];
+    for i in 0..slot_len_in_minutes {
+        times.push(start_time.clone().add(Duration::minutes(i)))
+    }
+    Ok(times)
+}
+
+fn get_start_time(date: Option<&str>, time: Option<&str>) -> Result<NaiveDateTime, Box<dyn Error>> {
+    let t = match time {
+        Some(t) => t.parse::<i32>(),
+        None => return Err("No time slot defined".into()),
+    };
+
+    let date = match date {
+        Some(t) => t,
+        None => return Err("No time slot defined".into()),
+    };
+    match t {
+        Ok(0)  => Ok(NaiveDateTime::parse_from_str(format!("{}T07:30:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(1)  => Ok(NaiveDateTime::parse_from_str(format!("{}T08:00:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(2)  => Ok(NaiveDateTime::parse_from_str(format!("{}T08:50:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(3)  => Ok(NaiveDateTime::parse_from_str(format!("{}T09:40:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(4)  => Ok(NaiveDateTime::parse_from_str(format!("{}T10:50:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(5)  => Ok(NaiveDateTime::parse_from_str(format!("{}T11:40:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(6)  => Ok(NaiveDateTime::parse_from_str(format!("{}T12:30:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(7)  => Ok(NaiveDateTime::parse_from_str(format!("{}T13:20:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(8)  => Ok(NaiveDateTime::parse_from_str(format!("{}T14:10:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        _  => Err("error parsing start time of sime-slot".into()),
+    }
 }
 
 impl Row {
@@ -136,8 +238,13 @@ fn main() {
     };
 
 
+    let location_data_reader = match read_csv("data/school_data.csv") {
+        Ok(r) => r,
+        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
+    };
 
-    // Assuming `reader` is a Vector
+    let data = parse_location_data(location_data_reader);
+
     let records: Vec<_> = reader.into_records().collect();
 
     records.par_iter().for_each(|r| {
@@ -162,12 +269,41 @@ fn main() {
         }; 
     });
 
-    {
-        let diff = DIFF.lock().unwrap();
-        println!("diff: {:#?}", diff);
-    }
     let elapsed = now.elapsed();
     println!("Elapsed: {:.2?}", elapsed);
+}
+
+fn parse_location_data(reader: Reader<File>) -> Result<Vec<LocationRow>, Box<dyn Error>> {
+    Ok(
+        reader
+            .into_records()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .filter_map(|r| {
+                let row_record = match r {
+                    Ok(row) => row,
+                    Err(e) => {
+                        println!("Something went wrong reading row: {:#?}", e);
+                        return None;
+                    },
+                };
+                let row = match LocationRow::from(
+                    row_record.get(1),
+                    row_record.get(3),
+                    row_record.get(5),
+                    row_record.get(9)
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("error parsing row: {:#?}", e);
+                        return None;
+                    },
+                };
+                Some(row)
+            })
+            .flatten()
+            .collect::<Vec<LocationRow>>()
+    )
 }
 
 
