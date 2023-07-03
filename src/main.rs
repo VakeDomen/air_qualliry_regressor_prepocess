@@ -2,7 +2,8 @@ use std::{error::Error, io, process, fs::File};
 
 use chrono::NaiveDateTime;
 use csv::Reader;
-
+use rayon::prelude::*;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct Row {
@@ -78,6 +79,8 @@ impl Row {
 }
 
 fn main() {
+    
+    let now = Instant::now();
     let reader = match read_csv("../data/apr_maj_jun_ajdovscina_iaq.csv") {
         Ok(r) => r,
         Err(e) => return println!("Something went worng reading csv: {:#?}", e),
@@ -85,10 +88,16 @@ fn main() {
 
 
 
-    for r in reader.into_records() {
+    // Assuming `reader` is a Vector
+    let records: Vec<_> = reader.into_records().collect();
+
+    records.par_iter().for_each(|r| {
         let row_record = match r {
             Ok(row) => row,
-            Err(e) => return println!("Something went worng reading row: {:#?}", e),
+            Err(e) => {
+                println!("Something went wrong reading row: {:#?}", e);
+                return;
+            },
         };
         let row = match Row::from(
             row_record.get(3),
@@ -99,10 +108,14 @@ fn main() {
             Ok(r) => r,
             Err(e) => {
                 println!("error parsing row: {:#?}", e);
-                continue;
+                return;
             },
         }; 
-    }
+    });
+
+
+    let elapsed = now.elapsed();
+    println!("Elapsed: {:.2?}", elapsed);
 }
 
 
