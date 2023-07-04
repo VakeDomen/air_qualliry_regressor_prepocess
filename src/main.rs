@@ -1,6 +1,6 @@
-use std::{error::Error, fs::File, sync::Mutex, collections::{HashSet, HashMap}, str::FromStr, ops::Add};
+use std::{error::Error, fs::File, sync::Mutex, collections::{HashSet, HashMap}, str::FromStr, ops::{Add, SubAssign}};
 
-use chrono::{NaiveDateTime, Timelike, Duration};
+use chrono::{NaiveDateTime, Timelike, Duration, NaiveDate, NaiveTime, Datelike};
 use csv::Reader;
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
@@ -130,25 +130,18 @@ fn parse_location_sensor(room: Option<&str>) -> Result<SensorLocation, Box<dyn E
 }
 
 fn parse_location_times(date: Option<&str>, time: Option<&str>) -> Result<Vec<NaiveDateTime>, Box<dyn Error>> {
-    let start_time = match get_start_time(date, time) {
+    let (start_time, duration) = match get_slot_time(date, time) {
         Ok(t) => t,
         Err(e) => return Err(format!("Error finding statr time of a time-slot: {}", e).into()),
-    };
-
-    let slot_len_in_minutes = if start_time.hour() == 7 {
-        25
-    } else {
-        45
-    };
-    
+    };   
     let mut times = vec![];
-    for i in 0..slot_len_in_minutes {
+    for i in 0..duration {
         times.push(start_time.clone().add(Duration::minutes(i)))
     }
     Ok(times)
 }
 
-fn get_start_time(date: Option<&str>, time: Option<&str>) -> Result<NaiveDateTime, Box<dyn Error>> {
+fn get_slot_time(date: Option<&str>, time: Option<&str>) -> Result<(NaiveDateTime, i64), Box<dyn Error>> {
     let t = match time {
         Some(t) => t.parse::<i32>(),
         None => return Err("No time slot defined".into()),
@@ -159,15 +152,15 @@ fn get_start_time(date: Option<&str>, time: Option<&str>) -> Result<NaiveDateTim
         None => return Err("No time slot defined".into()),
     };
     match t {
-        Ok(0)  => Ok(NaiveDateTime::parse_from_str(format!("{}T07:30:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
-        Ok(1)  => Ok(NaiveDateTime::parse_from_str(format!("{}T08:00:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
-        Ok(2)  => Ok(NaiveDateTime::parse_from_str(format!("{}T08:50:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
-        Ok(3)  => Ok(NaiveDateTime::parse_from_str(format!("{}T09:40:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
-        Ok(4)  => Ok(NaiveDateTime::parse_from_str(format!("{}T10:50:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
-        Ok(5)  => Ok(NaiveDateTime::parse_from_str(format!("{}T11:40:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
-        Ok(6)  => Ok(NaiveDateTime::parse_from_str(format!("{}T12:30:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
-        Ok(7)  => Ok(NaiveDateTime::parse_from_str(format!("{}T13:20:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
-        Ok(8)  => Ok(NaiveDateTime::parse_from_str(format!("{}T14:10:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?),
+        Ok(0)  => Ok((NaiveDateTime::parse_from_str(format!("{}T07:30:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 30)),
+        Ok(1)  => Ok((NaiveDateTime::parse_from_str(format!("{}T08:00:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 50)),
+        Ok(2)  => Ok((NaiveDateTime::parse_from_str(format!("{}T08:50:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 50)),
+        Ok(3)  => Ok((NaiveDateTime::parse_from_str(format!("{}T09:40:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 70)),
+        Ok(4)  => Ok((NaiveDateTime::parse_from_str(format!("{}T10:50:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 50)),
+        Ok(5)  => Ok((NaiveDateTime::parse_from_str(format!("{}T11:40:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 50)),
+        Ok(6)  => Ok((NaiveDateTime::parse_from_str(format!("{}T12:30:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 50)),
+        Ok(7)  => Ok((NaiveDateTime::parse_from_str(format!("{}T13:20:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 50)),
+        Ok(8)  => Ok((NaiveDateTime::parse_from_str(format!("{}T14:10:00Z", date).as_str(), "%Y-%m-%dT%H:%M:%S%Z")?, 45)),
         _  => Err("error parsing start time of sime-slot".into()),
     }
 }
@@ -348,34 +341,72 @@ fn parse_location_data(reader: Reader<File>) -> Result<DashMap<NaiveDateTime, Ve
 fn read_csv(file: &str) -> Result<Reader<File>, Box<dyn Error>> {
     Ok(csv::Reader::from_path(file)?)
 }
-
 fn merge_maps(
     people_data: DashMap<NaiveDateTime, Vec<SensedPeople>>,
     sensor_data: DashMap<NaiveDateTime, Vec<Sensor>>,
 ) -> DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
     let merged: DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>> = DashMap::new();
 
+    // For each minute in the sensor data (not sorted)
     for sensor_ref_multi in sensor_data.iter() {
+        // For each sensor record in the current minute
         for sensor in sensor_ref_multi.value() {
+            // Get all people records for this minute (might not exist)
             let people_ref_multi = people_data.get(sensor_ref_multi.key());
+            // Save the time
+            let time = sensor_ref_multi.key();
+            // Only collect data from 4am to 4pm
+            if time.hour() < 4 || time.hour() >= 16 {
+                continue;
+            }
+            // If there are any people recorded for any sensor at this minute
             if let Some(people_ref_multi) = &people_ref_multi {
+                // We'll keep track of whether we've found a SensedPeople struct for the current location
+                let mut people_present = false;
+                // Go through all the sensed people records
                 for sensed_people in people_ref_multi.value() {
+                    // If the recording we're looking at matches with the current sensor we're looking at
                     if sensor.location == sensed_people.sensor_location {
+                        // Get the target slot in merged hashmap to insert the values
+                        // Insert empty vector into merged (if it doesn't already exist) with sensor location as the key
                         let mut entry = merged
                             .entry(sensed_people.sensor_location.clone())
                             .or_insert_with(Vec::new);
+                        // Add the merged record to the entry
                         entry.push((
-                            *sensor_ref_multi.key(),
-                            sensor.clone(),
-                            sensed_people.clone(),
+                            *sensor_ref_multi.key(), // time
+                            sensor.clone(), // sensor data
+                            sensed_people.clone(), // people data
                         ));
+                        // We've found a SensedPeople struct for this location
+                        people_present = true;
                     }
+                }
+                // If no SensedPeople struct was found for this location, create one with a count of 0
+                if !people_present {
+                    // Get the target slot in merged hashmap to insert the values
+                    // Insert empty vector into merged (if it doesn't already exist) with sensor location as the key
+                    let mut entry = merged
+                        .entry(sensor.location.clone())
+                        .or_insert_with(Vec::new);
+                    // Add the merged record to the entry, creating a new SensedPeople struct with a count of 0
+                    entry.push((
+                        *sensor_ref_multi.key(),
+                        sensor.clone(),
+                        SensedPeople {
+                            sensor_location: sensor.location.clone(),
+                            people: 0,
+                        },
+                    ));
                 }
             } else {
                 // If there are no matching people data points, add a new SensedPeople struct with a count of 0
+                // Get the target slot in merged hashmap to insert the values
+                // Insert empty vector into merged (if it doesn't already exist) with sensor location as the key
                 let mut entry = merged
                     .entry(sensor.location.clone())
                     .or_insert_with(Vec::new);
+                // Add the merged record to the entry, creating a new SensedPeople struct with a count of 0
                 entry.push((
                     *sensor_ref_multi.key(),
                     sensor.clone(),
@@ -387,6 +418,7 @@ fn merge_maps(
             }
         }
     }
+
     merged
 }
 
@@ -402,11 +434,77 @@ fn get_sorted_data_for_location(
     })
 }
 
+fn aggregate_by_date(
+    data: Vec<(NaiveDateTime, Sensor, SensedPeople)>,
+) -> HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
+    let mut aggregated: HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>> = HashMap::new();
+    
+    for tuple in data {
+        let date = tuple.0.date();  // extract the date part of the NaiveDateTime
+        aggregated.entry(date).or_insert_with(Vec::new).push(tuple);
+    }
+
+    aggregated
+}
+
+fn find_gaps(
+    data: &HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>>,
+) -> HashMap<NaiveDate, Vec<(NaiveTime, NaiveTime)>> {
+    let mut gaps: HashMap<NaiveDate, Vec<(NaiveTime, NaiveTime)>> = HashMap::new();
+    
+    let start_time = NaiveTime::from_hms(4, 0, 0);  // start of day at 4am
+    let end_time = NaiveTime::from_hms(16, 0, 0);  // end of day at 4pm
+    let duration = Duration::minutes(1);  // each time slot is 1 minute
+
+    for (&date, tuples) in data {
+        let mut last_time = start_time;
+        
+        for &(time, _, _) in tuples {
+            let expected_time = last_time + duration;
+            
+            // Check if a gap exists between the expected time and the actual time
+            if time.time() > expected_time {
+                // A gap exists
+                gaps.entry(date)
+                    .or_insert_with(Vec::new)
+                    .push((last_time, time.time()));
+            }
+
+            last_time = time.time();
+        }
+
+        // Check for a gap between the last recorded time and the end of day
+        if last_time < end_time {
+            gaps.entry(date)
+                .or_insert_with(Vec::new)
+                .push((last_time, end_time));
+        }
+    }
+
+    gaps
+}
+
+fn filter_days_by_gaps(
+    mut days: HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>>, 
+) -> HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
+    let gaps = find_gaps(&days);
+    for (date, gaps_day) in gaps.iter() {
+        println!("Day: {} - gaps {:#?}", date, gaps_day);
+        let big_gaps = gaps_day
+            .iter()
+            .filter(|(s,e)| e.signed_duration_since(*s).num_minutes() > 2)
+            .count();
+        if big_gaps > 0 {
+            days.remove(date);
+        }
+    }
+    days
+}
 
 fn main() {
     
     let now = Instant::now();
-    let sensor_reader = match read_csv("data/apr_maj_jun_ajdovscina_iaq.csv") {
+    let sensor_reader = match read_csv("data/jan_feb_mar_ajdovscina_iaq.csv") {
         Ok(r) => r,
         Err(e) => return println!("Something went worng reading csv: {:#?}", e),
     };
@@ -428,12 +526,36 @@ fn main() {
     };
 
     let merged_data = merge_maps(location_data, sensor_data);
-    let sorted_data_u3a = get_sorted_data_for_location(&merged_data, &SensorLocation::U3a);
+    let sorted_data_u3a = match get_sorted_data_for_location(&merged_data, &SensorLocation::U3a) {
+        Some(data) => data,
+        None => return println!("Something went worng sorting the data"),
+    };
 
-    for (date, sensors, people) in sorted_data_u3a.unwrap().iter().take(3) {
-        println!("{:#?}: {:#?} {:#?}", date, sensors, people);
+    let aggreated_u3a = aggregate_by_date(sorted_data_u3a);
+    let aggreated_u3a = filter_days_by_gaps(aggreated_u3a);
+
+    let gaps = find_gaps(&aggreated_u3a);
+    
+    for (date, gaps_day) in gaps.iter() {
+        let big_gaps = gaps_day
+            .iter()
+            .filter(|(s,e)| e.signed_duration_since(*s).num_minutes() <= 3)
+            .count();
+
+        let max_gap = gaps_day
+            .iter()
+            .map(|(s,e)| 
+                e.signed_duration_since(*s).num_minutes()
+            ).max();
+        println!("weekend: {} {} \t- gaps: {} \t- bigger than 2min: {}\t - max gap: {:?}", date.weekday().num_days_from_monday() > 5, date, gaps_day.len(), big_gaps, max_gap);
+    }
+    println!("agregated days: {}", aggreated_u3a.keys().len());
+
+    for (date, data) in aggreated_u3a.iter() {
+        println!("{:#?} - {:#?}",date,  data.len());
     }
     
     let elapsed = now.elapsed();
     println!("Elapsed: {:.2?}", elapsed);
 }
+
