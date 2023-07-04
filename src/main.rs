@@ -489,7 +489,7 @@ fn filter_days_by_gaps(
 ) -> HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
     let gaps = find_gaps(&days);
     for (date, gaps_day) in gaps.iter() {
-        println!("Day: {} - gaps {:#?}", date, gaps_day);
+        // println!("Day: {} - gaps {:#?}", date, gaps_day);
         let big_gaps = gaps_day
             .iter()
             .filter(|(s,e)| e.signed_duration_since(*s).num_minutes() > 2)
@@ -499,6 +499,52 @@ fn filter_days_by_gaps(
         }
     }
     days
+}
+
+fn generate_windows(
+    data: &HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>>, 
+    window_size: usize
+) -> HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>> {
+    let mut windowed_data: HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>> = HashMap::new();
+
+    for (&date, tuples) in data {
+        let mut windows = Vec::new();
+        for i in 0..(tuples.len() - window_size) {
+            windows.push(tuples[i..(i + window_size)].to_vec());
+        }
+        windowed_data.insert(date, windows);
+    }
+
+    windowed_data
+}
+
+fn structure_data(
+    merged_data: DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>>
+) ->  HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>>> {
+    // define a hashmap to hold all the data
+    let mut data: HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>>> = HashMap::new();
+
+    // loop over all locations
+    for ref_location in merged_data.iter() {
+        let location = ref_location.key();
+        // get sorted data for the current location
+        let location_data = match get_sorted_data_for_location(&merged_data, location) {
+            Some(data) => data,
+            None => {
+                println!("Something went wrong sorting the data for location: {:?}", location);
+                continue;
+            },
+        };
+
+        // aggregate, filter and generate windows for the data
+        let location_data = aggregate_by_date(location_data);
+        let location_data = filter_days_by_gaps(location_data);
+        let location_data = generate_windows(&location_data, 180);
+
+        // store the windowed data in the hashmap
+        data.insert(location.clone(), location_data);
+    }
+    data
 }
 
 fn main() {
@@ -525,37 +571,48 @@ fn main() {
         Err(e) => return println!("Something went worng reading csv: {:#?}", e),
     };
 
-    let merged_data = merge_maps(location_data, sensor_data);
-    let sorted_data_u3a = match get_sorted_data_for_location(&merged_data, &SensorLocation::U3a) {
-        Some(data) => data,
-        None => return println!("Something went worng sorting the data"),
-    };
-
-    let aggreated_u3a = aggregate_by_date(sorted_data_u3a);
-    let aggreated_u3a = filter_days_by_gaps(aggreated_u3a);
-
-    let gaps = find_gaps(&aggreated_u3a);
-    
-    for (date, gaps_day) in gaps.iter() {
-        let big_gaps = gaps_day
-            .iter()
-            .filter(|(s,e)| e.signed_duration_since(*s).num_minutes() <= 3)
-            .count();
-
-        let max_gap = gaps_day
-            .iter()
-            .map(|(s,e)| 
-                e.signed_duration_since(*s).num_minutes()
-            ).max();
-        println!("weekend: {} {} \t- gaps: {} \t- bigger than 2min: {}\t - max gap: {:?}", date.weekday().num_days_from_monday() > 5, date, gaps_day.len(), big_gaps, max_gap);
-    }
-    println!("agregated days: {}", aggreated_u3a.keys().len());
-
-    for (date, data) in aggreated_u3a.iter() {
-        println!("{:#?} - {:#?}",date,  data.len());
-    }
-    
     let elapsed = now.elapsed();
-    println!("Elapsed: {:.2?}", elapsed);
+    println!("Parsing from file: {:.2?}", elapsed);
+    let resturcture = Instant::now();
+
+    let merged_data = merge_maps(location_data, sensor_data);
+    merged_data.remove(&SensorLocation::Jedilnica);
+    merged_data.remove(&SensorLocation::Hodnik);
+    merged_data.remove(&SensorLocation::Zbornica);
+
+    let data = structure_data(merged_data);
+    
+    // let sorted_data_u3a = match get_sorted_data_for_location(&merged_data, &SensorLocation::U3a) {
+    //     Some(data) => data,
+    //     None => return println!("Something went worng sorting the data"),
+    // };
+
+    // let aggreated_u3a = aggregate_by_date(sorted_data_u3a);
+    // let aggreated_u3a = filter_days_by_gaps(aggreated_u3a);
+    // let aggreated_u3a = generate_windows(&aggreated_u3a, 180);
+    // let gaps = find_gaps(&aggreated_u3a);
+    
+    // for (date, gaps_day) in gaps.iter() {
+    //     let big_gaps = gaps_day
+    //         .iter()
+    //         .filter(|(s,e)| e.signed_duration_since(*s).num_minutes() <= 3)
+    //         .count();
+
+    //     let max_gap = gaps_day
+    //         .iter()
+    //         .map(|(s,e)| 
+    //             e.signed_duration_since(*s).num_minutes()
+    //         ).max();
+    //     println!("weekend: {} {} \t- gaps: {} \t- bigger than 2min: {}\t - max gap: {:?}", date.weekday().num_days_from_monday() > 5, date, gaps_day.len(), big_gaps, max_gap);
+    // }
+    // println!("agregated days: {}", aggreated_u3a.keys().len());
+
+    // for (date, data) in aggreated_u3a.iter() {
+    //     println!("{:#?} - {:#?}",date,  data.len());
+    // }
+    let elapsed = resturcture.elapsed();
+    println!("Resturcture: {:.2?}", elapsed);
+    let elapsed = now.elapsed();
+    println!("Total: {:.2?}", elapsed);
 }
 
