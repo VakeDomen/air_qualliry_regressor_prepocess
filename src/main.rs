@@ -1,10 +1,11 @@
-use std::{error::Error, fs::File, sync::Mutex, collections::{HashSet, HashMap}, str::FromStr, ops::{Add, SubAssign}};
+use std::{error::Error, fs::File, sync::{Mutex, mpsc::channel}, collections::{HashSet, HashMap}, str::FromStr, ops::{Add, SubAssign}};
 
 use chrono::{NaiveDateTime, Timelike, Duration, NaiveDate, NaiveTime, Datelike};
 use csv::Reader;
 use once_cell::sync::Lazy;
 use rand::{thread_rng, seq::SliceRandom, rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
+use serde::Serialize;
 use std::time::Instant;
 use dashmap::DashMap;
 
@@ -58,7 +59,7 @@ pub enum SensorValue {
     VecEqCo2(f32),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TargetRow {
     window_id: i32,
     jan: bool,
@@ -628,6 +629,40 @@ fn shuffle_and_split_into_folds(mut data: Vec<Vec<TargetRow>>, folds: i32) -> Ve
     result
 }
 
+fn export_fold(data: &Vec<&TargetRow>, filename: &str) -> std::io::Result<()> {
+    let file = File::create(filename)?;
+
+    let mut writer = csv::Writer::from_writer(file);
+
+    for row in data {
+        writer.serialize(row)?;
+    }
+
+    writer.flush()
+}
+
+fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<dyn Error>> {
+    // Channel for error handling
+    let (tx, rx) = channel();
+
+    folded_data.into_par_iter().enumerate().for_each_with(tx, |tx, (i, fold)| {
+        // Flatten the Vec<Vec<TargetRow>> into Vec<TargetRow>
+        let flattened: Vec<_> = fold.iter().flat_map(|x| x.iter()).collect();
+
+        let filename = format!("fold_{}.csv", i + 1);
+        if let Err(e) = export_fold(&flattened, &filename) {
+            tx.send(e).expect("Channel send failed");
+        }
+    });
+
+    // Check if any threads encountered an error
+    match rx.try_recv() {
+        Ok(err) => Err(Box::new(err)),
+        Err(RecvError) => Ok(()),
+        _ => Ok(()),
+    }
+}
+
 
 
 fn main() {
@@ -670,8 +705,18 @@ fn main() {
     
     let elapsed = resturcture.elapsed();
     println!("Resturcture: {:.2?}", elapsed);
+    let export = Instant::now();
+
+
+    if let Err(e) = export_data(folded_data) {
+        println!("Error when saving folded data: {:#?}", e.to_string());
+    }
+
+    let elapsed = export.elapsed();
+    println!("Export: {:.2?}", elapsed);
     let elapsed = now.elapsed();
     println!("Total: {:.2?}", elapsed);
 }
+
 
 
