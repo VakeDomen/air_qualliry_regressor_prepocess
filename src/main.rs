@@ -3,9 +3,13 @@ use std::{error::Error, fs::File, sync::Mutex, collections::{HashSet, HashMap}, 
 use chrono::{NaiveDateTime, Timelike, Duration, NaiveDate, NaiveTime, Datelike};
 use csv::Reader;
 use once_cell::sync::Lazy;
+use rand::{thread_rng, seq::SliceRandom, rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
 use std::time::Instant;
 use dashmap::DashMap;
+
+static FOLDS: i32 = 5;
+const SEED: [u8; 32] = [42; 32];
 
 static LOCATION_DATA: Lazy<Mutex<HashMap<SensorLocation, Vec<SensedPeople>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -54,8 +58,9 @@ pub enum SensorValue {
     VecEqCo2(f32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TargetRow {
+    window_id: i32,
     jan: bool,
     feb: bool,
     mar: bool,
@@ -69,6 +74,15 @@ pub struct TargetRow {
     nov: bool,
     dec: bool,
     day: i8,
+    dew_point: f32,
+    luminance: f32,
+    voc_index: f32,
+    co2: f32,
+    abs_humidity: f32,
+    rh: f32,
+    temperature: f32,
+    vec_eq_co2: f32,
+    people: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -547,6 +561,75 @@ fn structure_data(
     data
 }
 
+fn restructure_data_to_target_rows(
+    data: HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>>>,
+) -> Vec<Vec<TargetRow>> {
+
+    data.into_par_iter().flat_map(|(_, date_map)| {
+        date_map.into_par_iter().flat_map(|(date, windows)| {
+            windows.into_par_iter().enumerate().map(move |(window_id, window)| {
+                window.into_iter().map(|(_, sensor, sensed_people)| {
+                    TargetRow {
+                        window_id: window_id as i32,
+                        jan: date.month() == 1,
+                        feb: date.month() == 2,
+                        mar: date.month() == 3,
+                        apr: date.month() == 4,
+                        may: date.month() == 5,
+                        jun: date.month() == 6,
+                        jul: date.month() == 7,
+                        aug: date.month() == 8,
+                        sep: date.month() == 9,
+                        oct: date.month() == 10,
+                        nov: date.month() == 11,
+                        dec: date.month() == 12,
+                        day: date.day() as i8,
+                        dew_point: sensor.dew_point.unwrap_or_default(),
+                        luminance: sensor.luminance.unwrap_or_default(),
+                        voc_index: sensor.voc_index.unwrap_or_default(),
+                        co2: sensor.co2.unwrap_or_default(),
+                        abs_humidity: sensor.abs_humidity.unwrap_or_default(),
+                        rh: sensor.rh.unwrap_or_default(),
+                        temperature: sensor.temperature.unwrap_or_default(),
+                        vec_eq_co2: sensor.vec_eq_co2.unwrap_or_default(),
+                        people: sensed_people.people,
+                    }
+                }).collect::<Vec<_>>() // Collect data of each window into a vector
+            }).collect::<Vec<_>>() // Collect data of each date into a vector
+        }).collect::<Vec<_>>() // Collect data of each location into a vector
+    }).collect() // Collect all the data into a single vector
+}
+
+
+fn shuffle_and_split_into_folds(mut data: Vec<Vec<TargetRow>>, folds: i32) -> Vec<Vec<Vec<TargetRow>>> {
+    // Create a mutable reference to data and shuffle it
+    let mut rng = StdRng::from_seed(SEED);
+    data.shuffle(&mut rng);
+
+    // Calculate the size of each fold
+    let fold_size = data.len() / folds as usize;
+
+    // Create the resulting vector of folds
+    let mut result = Vec::new();
+
+    // Create each fold by slicing the shuffled data
+    for i in 0..folds {
+        let start_index = (i as usize) * fold_size;
+        let end_index = if i == folds - 1 {
+            data.len() // If this is the last fold, take all the remaining data
+        } else {
+            start_index + fold_size
+        };
+
+        // Add the fold to the result
+        result.push(data[start_index..end_index].to_vec());
+    }
+
+    result
+}
+
+
+
 fn main() {
     
     let now = Instant::now();
@@ -581,38 +664,14 @@ fn main() {
     merged_data.remove(&SensorLocation::Zbornica);
 
     let data = structure_data(merged_data);
+    let data = restructure_data_to_target_rows(data);
     
-    // let sorted_data_u3a = match get_sorted_data_for_location(&merged_data, &SensorLocation::U3a) {
-    //     Some(data) => data,
-    //     None => return println!("Something went worng sorting the data"),
-    // };
-
-    // let aggreated_u3a = aggregate_by_date(sorted_data_u3a);
-    // let aggreated_u3a = filter_days_by_gaps(aggreated_u3a);
-    // let aggreated_u3a = generate_windows(&aggreated_u3a, 180);
-    // let gaps = find_gaps(&aggreated_u3a);
+    let folded_data: Vec<Vec<Vec<TargetRow>>> = shuffle_and_split_into_folds(data, FOLDS); 
     
-    // for (date, gaps_day) in gaps.iter() {
-    //     let big_gaps = gaps_day
-    //         .iter()
-    //         .filter(|(s,e)| e.signed_duration_since(*s).num_minutes() <= 3)
-    //         .count();
-
-    //     let max_gap = gaps_day
-    //         .iter()
-    //         .map(|(s,e)| 
-    //             e.signed_duration_since(*s).num_minutes()
-    //         ).max();
-    //     println!("weekend: {} {} \t- gaps: {} \t- bigger than 2min: {}\t - max gap: {:?}", date.weekday().num_days_from_monday() > 5, date, gaps_day.len(), big_gaps, max_gap);
-    // }
-    // println!("agregated days: {}", aggreated_u3a.keys().len());
-
-    // for (date, data) in aggreated_u3a.iter() {
-    //     println!("{:#?} - {:#?}",date,  data.len());
-    // }
     let elapsed = resturcture.elapsed();
     println!("Resturcture: {:.2?}", elapsed);
     let elapsed = now.elapsed();
     println!("Total: {:.2?}", elapsed);
 }
+
 
