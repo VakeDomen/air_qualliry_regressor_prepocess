@@ -686,7 +686,7 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
         let fold_dir = format!("out/fold_{}", fold_index + 1);
         println!("Constructing: {}", fold_dir);
         if let Err(e) = fs::create_dir_all(&fold_dir) {
-            return Err(Box::new("Failed creating directory".into()));
+            return Err(Box::new(e.to_string()));
         };
 
         // File paths for train and test data
@@ -703,13 +703,16 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
             Err(e) =>  return Err(Box::new(e.to_string())),
         };
 
+        println!("Extracting folds {}", fold_dir);
         let (test_data, train_data) = extract_and_concat(&folded_data, fold_index)?;
 
+        println!("Writing test data {}", fold_dir);
         if let Err(e) = pickle::to_writer(&mut test_file, &test_data, SerOptions::default()) {
-            return Err(Box::new("Failed creating directory".into()));
+            return Err(Box::new(e.to_string()));
         };
+        println!("Writing train data {}", fold_dir);
         if let Err(e) = pickle::to_writer(&mut train_file, &train_data, SerOptions::default()) {
-            return Err(Box::new("Failed creating directory".into()));
+            return Err(Box::new(e.to_string()));
         };
         
         Ok(())
