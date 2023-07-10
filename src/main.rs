@@ -678,29 +678,42 @@ fn export_fold(data: &Vec<&TargetRow>, filename: &str) -> std::io::Result<()> {
 //     }
 // }
 
-fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<dyn Error>> {
-    let len = folded_data.len();
-    for fold_index in 0..len {
+
+fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>> {
+    // Use par_iter to iterate in parallel
+    folded_data.par_iter().enumerate().try_for_each(|(fold_index, data)| {
         // Create fold directory
         let fold_dir = format!("out/fold_{}", fold_index + 1);
         println!("Constructing: {}", fold_dir);
-        fs::create_dir_all(&fold_dir)?;
+        if let Err(e) = fs::create_dir_all(&fold_dir) {
+            return Err(Box::new("Failed creating directory".into()));
+        };
 
         // File paths for train and test data
         let train_path = Path::new(&fold_dir).join("train.pkl");
         let test_path = Path::new(&fold_dir).join("test.pkl");
 
         // Open the files
-        let mut train_file = fs::File::create(train_path)?;
-        let mut test_file = fs::File::create(test_path)?;
-
+        let mut train_file = match fs::File::create(train_path) {
+            Ok(d) => d,
+            Err(e) =>  return Err(Box::new(e.to_string())),
+        };
+        let mut test_file = match fs::File::create(test_path) {
+            Ok(d) => d,
+            Err(e) =>  return Err(Box::new(e.to_string())),
+        };
 
         let (test_data, train_data) = extract_and_concat(&folded_data, fold_index)?;
+
+        if let Err(e) = pickle::to_writer(&mut test_file, &test_data, SerOptions::default()) {
+            return Err(Box::new("Failed creating directory".into()));
+        };
+        if let Err(e) = pickle::to_writer(&mut train_file, &train_data, SerOptions::default()) {
+            return Err(Box::new("Failed creating directory".into()));
+        };
         
-        pickle::to_writer(&mut test_file, &test_data, SerOptions::default())?;
-        pickle::to_writer(&mut train_file, &train_data, SerOptions::default())?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 fn extract_and_concat(
@@ -716,16 +729,17 @@ fn extract_and_concat(
 
     // Concatenate all other data
     let mut concat_data = Vec::new();
-    for (i, vec) in data.iter().enumerate() {
+
+    // Use par_iter to iterate in parallel
+    data.par_iter().enumerate().for_each(|(i, vec)| {
         if i != index {
             concat_data.extend(vec.clone());
         }
-    }
+    });
 
     // Return the specified data and the concatenated data
     Ok((specified_data, concat_data))
 }
-
 
 fn main() {
     
