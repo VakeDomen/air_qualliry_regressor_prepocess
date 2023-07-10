@@ -679,73 +679,141 @@ fn export_fold(data: &Vec<&TargetRow>, filename: &str) -> std::io::Result<()> {
 // }
 
 
-fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>> {
-    // Use par_iter to iterate in parallel
-    folded_data.par_iter().enumerate().try_for_each(|(fold_index, data)| {
-        // Create fold directory
-        let fold_dir = format!("out/fold_{}", fold_index + 1);
-        println!("Constructing: {}", fold_dir);
-        if let Err(e) = fs::create_dir_all(&fold_dir) {
-            return Err(Box::new(e.to_string()));
-        };
-
-        // File paths for train and test data
-        let train_path = Path::new(&fold_dir).join("train.pkl");
-        let test_path = Path::new(&fold_dir).join("test.pkl");
-
-        // Open the files
-        let mut train_file = match fs::File::create(train_path) {
-            Ok(d) => d,
-            Err(e) =>  return Err(Box::new(e.to_string())),
-        };
-        let mut test_file = match fs::File::create(test_path) {
-            Ok(d) => d,
-            Err(e) =>  return Err(Box::new(e.to_string())),
-        };
-
-        println!("Extracting folds {}", fold_dir);
-        let (test_data, train_data) = match extract_and_concat(&folded_data, fold_index) {
-            Ok(d) => d,
-            Err(e) =>  return Err(Box::new(e.to_string())),
-        };
-
-        println!("Writing test data {}", fold_dir);
-        if let Err(e) = pickle::to_writer(&mut test_file, &test_data, SerOptions::default()) {
-            return Err(Box::new(e.to_string()));
-        };
-        println!("Writing train data {}", fold_dir);
-        if let Err(e) = pickle::to_writer(&mut train_file, &train_data, SerOptions::default()) {
-            return Err(Box::new(e.to_string()));
-        };
-        
-        Ok(())
-    })
-}
-
-fn extract_and_concat(
-    data: &Vec<Vec<Vec<TargetRow>>>,
-    index: usize,
-) -> Result<(Vec<Vec<TargetRow>>, Vec<Vec<TargetRow>>), Box<dyn Error>> {
-    if index >= data.len() {
-        return Err("Index out of range".into());
+fn export_data(mut folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>> {
+    let dash_data: DashMap<usize, Vec<Vec<TargetRow>>> = DashMap::new();
+    let num_of_folds = folded_data.len();
+    for (i, fold) in folded_data.into_iter().enumerate() {
+        dash_data.insert(i, fold);
     }
 
-    // Clone the specified data
-    let specified_data = data[index].clone();
+    [0..num_of_folds].into_par_iter().enumerate().try_for_each(|(fold_index, _data)| {
+            // Create fold directory
+            let fold_dir = format!("out/fold_{}", fold_index + 1);
+            println!("Constructing: {}", fold_dir);
+            if let Err(e) = fs::create_dir_all(&fold_dir) {
+                return Err(Box::new(e.to_string()));
+            };
+            // File paths for train and test data
+            let train_path = Path::new(&fold_dir).join("train.pkl");
+            let test_path = Path::new(&fold_dir).join("test.pkl");
 
-    // Concatenate all other data
-    let mut concat_data = Vec::new();
+            // Open the files
+            let mut train_file = match fs::File::create(train_path) {
+                Ok(d) => d,
+                Err(e) =>  return Err(Box::new(e.to_string())),
+            };
+            let mut test_file = match fs::File::create(test_path) {
+                Ok(d) => d,
+                Err(e) =>  return Err(Box::new(e.to_string())),
+            };
 
-    // Use par_iter to iterate in parallel
-    data.par_iter().enumerate().for_each(|(i, vec)| {
-        if i != index {
-            concat_data.extend(vec.clone());
-        }
-    });
+            let mut training_data: Vec<Vec<TargetRow>> = Vec::new();
 
-    // Return the specified data and the concatenated data
-    Ok((specified_data, concat_data))
+            for i in 0..num_of_folds {
+                if i == 0 {
+                    let test_data = match dash_data.get(&i) {
+                        Some(d) => d,
+                        None => todo!(),
+                    };
+
+                    println!("Writing test data {}", fold_dir);
+                    if let Err(e) = pickle::to_writer(&mut test_file, &test_data.value(), SerOptions::default()) {
+                        return Err(Box::new(e.to_string()));
+                    };
+                } else {
+                    let target_fold = (fold_index + i) % num_of_folds;
+                    match dash_data.get(&i) {
+                        Some(d) => training_data.extend_from_slice(d.value()),
+                        None => return Err(Box::new(format!("data not found {} {}", target_fold, fold_index))),
+                    }
+                }
+            }
+            println!("Writing train data {}", fold_dir);
+            if let Err(e) = pickle::to_writer(&mut train_file, &training_data, SerOptions::default()) {
+                return Err(Box::new(e.to_string()));
+            };
+
+            Ok(())
+        })
+
+    // // Use par_iter to iterate in parallel
+    // folded_data.par_iter().enumerate().try_for_each(|(fold_index, _data)| {
+    //     // Create fold directory
+    //     let fold_dir = format!("out/fold_{}", fold_index + 1);
+    //     println!("Constructing: {}", fold_dir);
+    //     if let Err(e) = fs::create_dir_all(&fold_dir) {
+    //         return Err(Box::new(e.to_string()));
+    //     };
+
+    //     // File paths for train and test data
+    //     let train_path = Path::new(&fold_dir).join("train.pkl");
+    //     let test_path = Path::new(&fold_dir).join("test.pkl");
+
+    //     // Open the files
+    //     let mut train_file = match fs::File::create(train_path) {
+    //         Ok(d) => d,
+    //         Err(e) =>  return Err(Box::new(e.to_string())),
+    //     };
+    //     let mut test_file = match fs::File::create(test_path) {
+    //         Ok(d) => d,
+    //         Err(e) =>  return Err(Box::new(e.to_string())),
+    //     };
+
+    //     println!("Extracting folds {}", fold_dir);
+    //     let (test_data, train_data) = match extract_and_concat(&mut folded_data, fold_index) {
+    //         Ok(d) => d,
+    //         Err(e) =>  return Err(Box::new(e.to_string())),
+    //     };
+
+    //     println!("Writing test data {}", fold_dir);
+    //     if let Err(e) = pickle::to_writer(&mut test_file, &test_data, SerOptions::default()) {
+    //         return Err(Box::new(e.to_string()));
+    //     };
+    //     println!("Writing train data {}", fold_dir);
+    //     if let Err(e) = pickle::to_writer(&mut train_file, &train_data, SerOptions::default()) {
+    //         return Err(Box::new(e.to_string()));
+    //     };
+        
+    //     Ok(())
+    // })
 }
+
+// fn extract_and_concat(
+//     data: &Vec<Vec<Vec<TargetRow>>>,
+//     index: usize,
+// ) -> Result<(Vec<Vec<TargetRow>>, Vec<&Vec<TargetRow>>), Box<dyn Error>> {
+//     if index >= data.len() {
+//         return Err("Index out of range".into());
+//     }
+
+//     // Clone the specified data
+//     let specified_data = &data[index];
+
+//     // Concatenate all other data
+//     let mut concat_data = Vec::new();
+
+//     // Use par_iter to iterate in parallel
+//     data.into_par_iter().enumerate().for_each(|(i, vec)| {
+//         if i != index {
+//             concat_data.extend(vec);
+//         }
+//     });
+
+//     // Return the specified data and the concatenated data
+//     Ok((specified_data.to_vec(), concat_data))
+// }
+
+// fn exclude_index(vec: &Vec<Vec<TargetRow>>, index: usize) -> Vec<&Vec<TargetRow>> {
+//     let mut result: Vec<&Vec<TargetRow>> = vec![];
+    
+//     for (i, &item) in vec.iter().enumerate() {
+//         if i != index {
+//             result.push(&item);
+//         }
+//     }
+    
+//     result
+// }
 
 fn main() {
     
