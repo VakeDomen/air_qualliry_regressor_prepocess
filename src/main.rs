@@ -1,4 +1,4 @@
-use std::{error::Error, fs::{File, self}, sync::{Mutex, mpsc::channel}, collections::HashMap, ops::Add, path::Path};
+use std::{error::Error, fs::{File, self}, sync::{Mutex, mpsc::channel}, collections::HashMap, ops::Add, path::Path, io::BufWriter};
 
 use chrono::{NaiveDateTime, Timelike, Duration, NaiveDate, NaiveTime, Datelike};
 use csv::Reader;
@@ -679,7 +679,7 @@ fn export_fold(data: &Vec<&TargetRow>, filename: &str) -> std::io::Result<()> {
 // }
 
 
-fn export_data(mut folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>> {
+fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>> {
     let dash_data: DashMap<usize, Vec<Vec<TargetRow>>> = DashMap::new();
     let num_of_folds = folded_data.len();
     for (i, fold) in folded_data.into_iter().enumerate() {
@@ -699,11 +699,11 @@ fn export_data(mut folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<Stri
 
             // Open the files
             let mut train_file = match fs::File::create(train_path) {
-                Ok(d) => d,
+                Ok(d) => BufWriter::new(d),
                 Err(e) =>  return Err(Box::new(e.to_string())),
             };
             let mut test_file = match fs::File::create(test_path) {
-                Ok(d) => d,
+                Ok(d) => BufWriter::new(d),
                 Err(e) =>  return Err(Box::new(e.to_string())),
             };
 
@@ -735,85 +735,7 @@ fn export_data(mut folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<Stri
 
             Ok(())
         })
-
-    // // Use par_iter to iterate in parallel
-    // folded_data.par_iter().enumerate().try_for_each(|(fold_index, _data)| {
-    //     // Create fold directory
-    //     let fold_dir = format!("out/fold_{}", fold_index + 1);
-    //     println!("Constructing: {}", fold_dir);
-    //     if let Err(e) = fs::create_dir_all(&fold_dir) {
-    //         return Err(Box::new(e.to_string()));
-    //     };
-
-    //     // File paths for train and test data
-    //     let train_path = Path::new(&fold_dir).join("train.pkl");
-    //     let test_path = Path::new(&fold_dir).join("test.pkl");
-
-    //     // Open the files
-    //     let mut train_file = match fs::File::create(train_path) {
-    //         Ok(d) => d,
-    //         Err(e) =>  return Err(Box::new(e.to_string())),
-    //     };
-    //     let mut test_file = match fs::File::create(test_path) {
-    //         Ok(d) => d,
-    //         Err(e) =>  return Err(Box::new(e.to_string())),
-    //     };
-
-    //     println!("Extracting folds {}", fold_dir);
-    //     let (test_data, train_data) = match extract_and_concat(&mut folded_data, fold_index) {
-    //         Ok(d) => d,
-    //         Err(e) =>  return Err(Box::new(e.to_string())),
-    //     };
-
-    //     println!("Writing test data {}", fold_dir);
-    //     if let Err(e) = pickle::to_writer(&mut test_file, &test_data, SerOptions::default()) {
-    //         return Err(Box::new(e.to_string()));
-    //     };
-    //     println!("Writing train data {}", fold_dir);
-    //     if let Err(e) = pickle::to_writer(&mut train_file, &train_data, SerOptions::default()) {
-    //         return Err(Box::new(e.to_string()));
-    //     };
-        
-    //     Ok(())
-    // })
 }
-
-// fn extract_and_concat(
-//     data: &Vec<Vec<Vec<TargetRow>>>,
-//     index: usize,
-// ) -> Result<(Vec<Vec<TargetRow>>, Vec<&Vec<TargetRow>>), Box<dyn Error>> {
-//     if index >= data.len() {
-//         return Err("Index out of range".into());
-//     }
-
-//     // Clone the specified data
-//     let specified_data = &data[index];
-
-//     // Concatenate all other data
-//     let mut concat_data = Vec::new();
-
-//     // Use par_iter to iterate in parallel
-//     data.into_par_iter().enumerate().for_each(|(i, vec)| {
-//         if i != index {
-//             concat_data.extend(vec);
-//         }
-//     });
-
-//     // Return the specified data and the concatenated data
-//     Ok((specified_data.to_vec(), concat_data))
-// }
-
-// fn exclude_index(vec: &Vec<Vec<TargetRow>>, index: usize) -> Vec<&Vec<TargetRow>> {
-//     let mut result: Vec<&Vec<TargetRow>> = vec![];
-    
-//     for (i, &item) in vec.iter().enumerate() {
-//         if i != index {
-//             result.push(&item);
-//         }
-//     }
-    
-//     result
-// }
 
 fn main() {
     
