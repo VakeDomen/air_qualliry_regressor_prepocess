@@ -704,7 +704,10 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
         };
 
         println!("Extracting folds {}", fold_dir);
-        let (test_data, train_data) = extract_and_concat(&folded_data, fold_index)?;
+        let (test_data, train_data) = match extract_and_concat(&folded_data, fold_index) {
+            Ok(d) => d,
+            Err(e) =>  return Err(Box::new(e.to_string())),
+        };
 
         println!("Writing test data {}", fold_dir);
         if let Err(e) = pickle::to_writer(&mut test_file, &test_data, SerOptions::default()) {
