@@ -686,7 +686,11 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
         dash_data.insert(i, fold);
     }
 
-    [0..num_of_folds].into_par_iter().enumerate().try_for_each(|(fold_index, _data)| {
+    (0..num_of_folds)
+        .collect::<Vec<usize>>()
+        .into_par_iter()
+        .enumerate()
+        .try_for_each(|(fold_index, _data)| {
             // Create fold directory
             let fold_dir = format!("out/fold_{}", fold_index + 1);
             println!("Constructing: {}", fold_dir);
