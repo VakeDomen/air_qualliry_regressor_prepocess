@@ -1,15 +1,17 @@
-use std::{error::Error, fs::File, sync::{Mutex, mpsc::channel}, collections::{HashSet, HashMap}, str::FromStr, ops::{Add, SubAssign}};
+use std::{error::Error, fs::{File, self}, sync::{Mutex, mpsc::channel}, collections::HashMap, ops::Add, path::Path};
 
 use chrono::{NaiveDateTime, Timelike, Duration, NaiveDate, NaiveTime, Datelike};
 use csv::Reader;
 use once_cell::sync::Lazy;
-use rand::{thread_rng, seq::SliceRandom, rngs::StdRng, SeedableRng};
+use pickle::SerOptions;
+use rand::{seq::SliceRandom, rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::time::Instant;
 use dashmap::DashMap;
+use serde_pickle as pickle;
 
-static FOLDS: i32 = 5;
+static FOLDS: i32 = 10;
 const SEED: [u8; 32] = [42; 32];
 
 static LOCATION_DATA: Lazy<Mutex<HashMap<SensorLocation, Vec<SensedPeople>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -62,19 +64,19 @@ pub enum SensorValue {
 #[derive(Debug, Clone, Serialize)]
 pub struct TargetRow {
     window_id: i32,
-    jan: bool,
-    feb: bool,
-    mar: bool,
-    apr: bool,
-    may: bool,
-    jun: bool,
-    jul: bool,
-    aug: bool,
-    sep: bool,
-    oct: bool,
-    nov: bool,
-    dec: bool,
-    day: i8,
+    jan: f32,
+    feb: f32,
+    mar: f32,
+    apr: f32,
+    may: f32,
+    jun: f32,
+    jul: f32,
+    aug: f32,
+    sep: f32,
+    oct: f32,
+    nov: f32,
+    dec: f32,
+    day: f32,
     dew_point: f32,
     luminance: f32,
     voc_index: f32,
@@ -83,7 +85,7 @@ pub struct TargetRow {
     rh: f32,
     temperature: f32,
     vec_eq_co2: f32,
-    people: i32,
+    people: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -565,40 +567,53 @@ fn structure_data(
 fn restructure_data_to_target_rows(
     data: HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>>>,
 ) -> Vec<Vec<TargetRow>> {
+    let mut window_id = 1;
+    let mut result: Vec<Vec<TargetRow>> = Vec::new();
 
-    data.into_par_iter().flat_map(|(_, date_map)| {
-        date_map.into_par_iter().flat_map(|(date, windows)| {
-            windows.into_par_iter().enumerate().map(move |(window_id, window)| {
-                window.into_iter().map(|(_, sensor, sensed_people)| {
-                    TargetRow {
-                        window_id: window_id as i32,
-                        jan: date.month() == 1,
-                        feb: date.month() == 2,
-                        mar: date.month() == 3,
-                        apr: date.month() == 4,
-                        may: date.month() == 5,
-                        jun: date.month() == 6,
-                        jul: date.month() == 7,
-                        aug: date.month() == 8,
-                        sep: date.month() == 9,
-                        oct: date.month() == 10,
-                        nov: date.month() == 11,
-                        dec: date.month() == 12,
-                        day: date.day() as i8,
-                        dew_point: sensor.dew_point.unwrap_or_default(),
-                        luminance: sensor.luminance.unwrap_or_default(),
-                        voc_index: sensor.voc_index.unwrap_or_default(),
-                        co2: sensor.co2.unwrap_or_default(),
-                        abs_humidity: sensor.abs_humidity.unwrap_or_default(),
-                        rh: sensor.rh.unwrap_or_default(),
-                        temperature: sensor.temperature.unwrap_or_default(),
-                        vec_eq_co2: sensor.vec_eq_co2.unwrap_or_default(),
-                        people: sensed_people.people,
-                    }
-                }).collect::<Vec<_>>() // Collect data of each window into a vector
-            }).collect::<Vec<_>>() // Collect data of each date into a vector
-        }).collect::<Vec<_>>() // Collect data of each location into a vector
-    }).collect() // Collect all the data into a single vector
+    for (_, date_map) in data {
+        for (date, windows) in date_map {
+            let mut date_rows: Vec<TargetRow> = Vec::new();
+
+            for (_, window) in windows.into_iter().enumerate() {
+                let window_rows: Vec<TargetRow> = window
+                    .into_iter()
+                    .map(|(_, sensor, sensed_people)| {
+                        TargetRow {
+                            window_id: window_id as i32,
+                            jan: if date.month() == 1 {1.} else {0.},
+                            feb: if date.month() == 2 {1.} else {0.},
+                            mar: if date.month() == 3 {1.} else {0.},
+                            apr: if date.month() == 4 {1.} else {0.},
+                            may: if date.month() == 5 {1.} else {0.},
+                            jun: if date.month() == 6 {1.} else {0.},
+                            jul: if date.month() == 7 {1.} else {0.},
+                            aug: if date.month() == 8 {1.} else {0.},
+                            sep: if date.month() == 9 {1.} else {0.},
+                            oct: if date.month() == 10 {1.} else {0.},
+                            nov: if date.month() == 11 {1.} else {0.},
+                            dec: if date.month() == 12 {1.} else {0.},
+                            day: date.day() as f32,
+                            dew_point: sensor.dew_point.unwrap_or_default(),
+                            luminance: sensor.luminance.unwrap_or_default(),
+                            voc_index: sensor.voc_index.unwrap_or_default(),
+                            co2: sensor.co2.unwrap_or_default(),
+                            abs_humidity: sensor.abs_humidity.unwrap_or_default(),
+                            rh: sensor.rh.unwrap_or_default(),
+                            temperature: sensor.temperature.unwrap_or_default(),
+                            vec_eq_co2: sensor.vec_eq_co2.unwrap_or_default(),
+                            people: sensed_people.people as f32,
+                        }
+                    })
+                    .collect();
+                window_id += 1;
+                date_rows.extend(window_rows);
+            }
+
+            result.push(date_rows);
+        }
+    }
+
+    result // Collect all the data into a single vector
 }
 
 
@@ -641,34 +656,86 @@ fn export_fold(data: &Vec<&TargetRow>, filename: &str) -> std::io::Result<()> {
     writer.flush()
 }
 
+// fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<dyn Error>> {
+//     // Channel for error handling
+//     let (tx, rx) = channel();
+
+//     folded_data.into_par_iter().enumerate().for_each_with(tx, |tx, (i, fold)| {
+//         // Flatten the Vec<Vec<TargetRow>> into Vec<TargetRow>
+//         let flattened: Vec<_> = fold.iter().flat_map(|x| x.iter()).collect();
+
+//         let filename = format!("fold_{}.csv", i + 1);
+//         if let Err(e) = export_fold(&flattened, &filename) {
+//             tx.send(e).expect("Channel send failed");
+//         }
+//     });
+
+//     // Check if any threads encountered an error
+//     match rx.try_recv() {
+//         Ok(err) => Err(Box::new(err)),
+//         Err(RecvError) => Ok(()),
+//         _ => Ok(()),
+//     }
+// }
+
 fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<dyn Error>> {
-    // Channel for error handling
-    let (tx, rx) = channel();
+    let len = folded_data.len();
+    for fold_index in 0..len {
+        // Create fold directory
+        let fold_dir = format!("out/fold_{}", fold_index + 1);
+        println!("Constructing: {}", fold_dir);
+        fs::create_dir_all(&fold_dir)?;
 
-    folded_data.into_par_iter().enumerate().for_each_with(tx, |tx, (i, fold)| {
-        // Flatten the Vec<Vec<TargetRow>> into Vec<TargetRow>
-        let flattened: Vec<_> = fold.iter().flat_map(|x| x.iter()).collect();
+        // File paths for train and test data
+        let train_path = Path::new(&fold_dir).join("train.pkl");
+        let test_path = Path::new(&fold_dir).join("test.pkl");
 
-        let filename = format!("fold_{}.csv", i + 1);
-        if let Err(e) = export_fold(&flattened, &filename) {
-            tx.send(e).expect("Channel send failed");
-        }
-    });
+        // Open the files
+        let mut train_file = fs::File::create(train_path)?;
+        let mut test_file = fs::File::create(test_path)?;
 
-    // Check if any threads encountered an error
-    match rx.try_recv() {
-        Ok(err) => Err(Box::new(err)),
-        Err(RecvError) => Ok(()),
-        _ => Ok(()),
+
+        let (test_data, train_data) = extract_and_concat(&folded_data, fold_index)?;
+        
+        pickle::to_writer(&mut test_file, &test_data, SerOptions::default())?;
+        pickle::to_writer(&mut train_file, &train_data, SerOptions::default())?;
     }
+    Ok(())
 }
 
+fn extract_and_concat(
+    data: &Vec<Vec<Vec<TargetRow>>>,
+    index: usize,
+) -> Result<(Vec<Vec<TargetRow>>, Vec<Vec<TargetRow>>), Box<dyn Error>> {
+    if index >= data.len() {
+        return Err("Index out of range".into());
+    }
+
+    // Clone the specified data
+    let specified_data = data[index].clone();
+
+    // Concatenate all other data
+    let mut concat_data = Vec::new();
+    for (i, vec) in data.iter().enumerate() {
+        if i != index {
+            concat_data.extend(vec.clone());
+        }
+    }
+
+    // Return the specified data and the concatenated data
+    Ok((specified_data, concat_data))
+}
 
 
 fn main() {
     
     let now = Instant::now();
-    let sensor_reader = match read_csv("data/jan_feb_mar_ajdovscina_iaq.csv") {
+    let sensor_reader_1 = match read_csv("data/jan_feb_mar_ajdovscina_iaq.csv") {
+        Ok(r) => r,
+        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
+    };
+
+    let sensor_reader_2 = match read_csv("data/apr_maj_jun_ajdovscina_iaq.csv") {
         Ok(r) => r,
         Err(e) => return println!("Something went worng reading csv: {:#?}", e),
     };
@@ -684,10 +751,19 @@ fn main() {
         Err(e) => return println!("Something went worng reading csv: {:#?}", e),
     };
 
-    let sensor_data = match parse_sensor_data(sensor_reader) {
+    let sensor_data = match parse_sensor_data(sensor_reader_1) {
         Ok(r) => r,
         Err(e) => return println!("Something went worng reading csv: {:#?}", e),
     };
+
+    let sensor_data_2 = match parse_sensor_data(sensor_reader_2) {
+        Ok(r) => r,
+        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
+    };
+
+    for val_ref in sensor_data_2.into_iter() {
+        sensor_data.insert(val_ref.0, val_ref.1);
+    }
 
     let elapsed = now.elapsed();
     println!("Parsing from file: {:.2?}", elapsed);
@@ -701,14 +777,14 @@ fn main() {
     let data = structure_data(merged_data);
     let data = restructure_data_to_target_rows(data);
     
-    let folded_data: Vec<Vec<Vec<TargetRow>>> = shuffle_and_split_into_folds(data, FOLDS); 
+    let data: Vec<Vec<Vec<TargetRow>>> = shuffle_and_split_into_folds(data, FOLDS); 
     
     let elapsed = resturcture.elapsed();
     println!("Resturcture: {:.2?}", elapsed);
     let export = Instant::now();
 
 
-    if let Err(e) = export_data(folded_data) {
+    if let Err(e) = export_data(data) {
         println!("Error when saving folded data: {:#?}", e.to_string());
     }
 
@@ -717,6 +793,4 @@ fn main() {
     let elapsed = now.elapsed();
     println!("Total: {:.2?}", elapsed);
 }
-
-
 
