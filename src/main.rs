@@ -714,14 +714,18 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
             let mut training_data: Vec<Vec<TargetRow>> = Vec::new();
 
             for i in 0..num_of_folds {
-                if i == 0 {
-                    let test_data = match dash_data.get(&i) {
-                        Some(d) => d,
-                        None => todo!(),
+                if i == fold_index {
+                    let value = {
+
+                        let test_data = match dash_data.get(&i) {
+                            Some(d) => d,
+                            None => todo!(),
+                        };
+                        test_data.value().clone()
                     };
 
                     println!("Writing test data {}", fold_dir);
-                    if let Err(e) = pickle::to_writer(&mut test_file, &test_data.value(), SerOptions::default()) {
+                    if let Err(e) = pickle::to_writer(&mut test_file, &value, SerOptions::default()) {
                         return Err(Box::new(e.to_string()));
                     };
                 } else {
