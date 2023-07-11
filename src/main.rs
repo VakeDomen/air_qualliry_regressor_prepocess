@@ -644,9 +644,7 @@ fn shuffle_and_split_into_folds(mut data: Vec<Vec<TargetRow>>, folds: i32) -> Ve
     result
 }
 
-fn export_fold(data: &Vec<&TargetRow>, filename: &str) -> std::io::Result<()> {
-    let file = File::create(filename)?;
-
+fn export_fold(data: Vec<TargetRow>, file: File) -> std::io::Result<()> {
     let mut writer = csv::Writer::from_writer(file);
 
     for row in data {
@@ -697,20 +695,7 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
             if let Err(e) = fs::create_dir_all(&fold_dir) {
                 return Err(Box::new(e.to_string()));
             };
-            // File paths for train and test data
-            let train_path = Path::new(&fold_dir).join("train.pkl");
-            let test_path = Path::new(&fold_dir).join("test.pkl");
-
-            // Open the files
-            let mut train_file = match fs::File::create(train_path) {
-                Ok(d) => BufWriter::new(d),
-                Err(e) =>  return Err(Box::new(e.to_string())),
-            };
-            let mut test_file = match fs::File::create(test_path) {
-                Ok(d) => BufWriter::new(d),
-                Err(e) =>  return Err(Box::new(e.to_string())),
-            };
-
+            
             let mut training_data: Vec<Vec<TargetRow>> = Vec::new();
 
             for i in 0..num_of_folds {
@@ -725,8 +710,18 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
                     };
 
                     println!("Writing test data {}", fold_dir);
-                    if let Err(e) = pickle::to_writer(&mut test_file, &value, SerOptions::default()) {
-                        return Err(Box::new(e.to_string()));
+                    // if let Err(e) = pickle::to_writer(&mut test_file, &value, SerOptions::default()) {
+                    //     return Err(Box::new(e.to_string()));
+                    // };
+                    let test_file = match fs::File::create(Path::new(&fold_dir).join("test.pkl")) {
+                        Ok(d) => d,
+                        Err(e) =>  return Err(Box::new(e.to_string())),
+                    };
+                    if let Err(e) = export_fold(
+                        value.into_iter().flatten().collect::<Vec<TargetRow>>(), 
+                        test_file
+                    ) {
+                        println!("Error saving test data {}: {}", fold_dir, e.to_string());
                     };
                 } else {
                     let target_fold = (fold_index + i) % num_of_folds;
@@ -737,8 +732,19 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
                 }
             }
             println!("Writing train data {}", fold_dir);
-            if let Err(e) = pickle::to_writer(&mut train_file, &training_data, SerOptions::default()) {
-                return Err(Box::new(e.to_string()));
+            // if let Err(e) = pickle::to_writer(&mut train_file, &training_data, SerOptions::default()) {
+            //     return Err(Box::new(e.to_string()));
+            // };
+            let train_file = match fs::File::create(Path::new(&fold_dir).join("train.pkl")) {
+                Ok(d) => d,
+                Err(e) =>  return Err(Box::new(e.to_string())),
+            };
+
+            if let Err(e) = export_fold(
+                training_data.into_iter().flatten().collect::<Vec<TargetRow>>(), 
+                train_file
+            ) {
+                println!("Error saving test data {}: {}", fold_dir, e.to_string());
             };
 
             Ok(())
