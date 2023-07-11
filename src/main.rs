@@ -77,6 +77,7 @@ pub struct TargetRow {
     nov: f32,
     dec: f32,
     day: f32,
+    time: f32,
     dew_point: f32,
     luminance: f32,
     voc_index: f32,
@@ -577,7 +578,7 @@ fn restructure_data_to_target_rows(
             for (_, window) in windows.into_iter().enumerate() {
                 let window_rows: Vec<TargetRow> = window
                     .into_iter()
-                    .map(|(_, sensor, sensed_people)| {
+                    .map(|(ndt, sensor, sensed_people)| {
                         TargetRow {
                             window_id: window_id as i32,
                             jan: if date.month() == 1 {1.} else {0.},
@@ -593,6 +594,7 @@ fn restructure_data_to_target_rows(
                             nov: if date.month() == 11 {1.} else {0.},
                             dec: if date.month() == 12 {1.} else {0.},
                             day: date.day() as f32,
+                            time: ndt.num_seconds_from_midnight() as f32,
                             dew_point: sensor.dew_point.unwrap_or_default(),
                             luminance: sensor.luminance.unwrap_or_default(),
                             voc_index: sensor.voc_index.unwrap_or_default(),
@@ -713,7 +715,7 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
                     // if let Err(e) = pickle::to_writer(&mut test_file, &value, SerOptions::default()) {
                     //     return Err(Box::new(e.to_string()));
                     // };
-                    let test_file = match fs::File::create(Path::new(&fold_dir).join("test.pkl")) {
+                    let test_file = match fs::File::create(Path::new(&fold_dir).join("test.csv")) {
                         Ok(d) => d,
                         Err(e) =>  return Err(Box::new(e.to_string())),
                     };
@@ -735,7 +737,7 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
             // if let Err(e) = pickle::to_writer(&mut train_file, &training_data, SerOptions::default()) {
             //     return Err(Box::new(e.to_string()));
             // };
-            let train_file = match fs::File::create(Path::new(&fold_dir).join("train.pkl")) {
+            let train_file = match fs::File::create(Path::new(&fold_dir).join("train.csv")) {
                 Ok(d) => d,
                 Err(e) =>  return Err(Box::new(e.to_string())),
             };
