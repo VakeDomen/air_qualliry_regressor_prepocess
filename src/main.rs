@@ -12,7 +12,9 @@ use dashmap::DashMap;
 use serde_pickle as pickle;
 
 static FOLDS: i32 = 10;
+static WINDOW_SIZE: usize = 300;
 const SEED: [u8; 32] = [42; 32];
+
 
 static LOCATION_DATA: Lazy<Mutex<HashMap<SensorLocation, Vec<SensedPeople>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -557,7 +559,7 @@ fn structure_data(
         // aggregate, filter and generate windows for the data
         let location_data = aggregate_by_date(location_data);
         let location_data = filter_days_by_gaps(location_data);
-        let location_data = generate_windows(&location_data, 180);
+        let location_data = generate_windows(&location_data, WINDOW_SIZE);
 
         // store the windowed data in the hashmap
         data.insert(location.clone(), location_data);
