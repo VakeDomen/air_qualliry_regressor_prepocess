@@ -374,6 +374,10 @@ fn merge_maps_updated(
         let current_sensors_minute_values = sensor_ref.value();
         let current_minute_sensed_people_ref = people_data.get(current_sensors_minute);
         
+        if current_sensors_minute.hour() < 4 || current_sensors_minute.hour() >= 16 {
+            continue;
+        }
+
         for sensor in current_sensors_minute_values.iter() {
             let current_minute_sensed_people = match current_minute_sensed_people_ref {
                 Some(ref p) => Some(p.value().clone()),
