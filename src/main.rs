@@ -361,6 +361,52 @@ fn parse_location_data(reader: Reader<File>) -> Result<DashMap<NaiveDateTime, Ve
 fn read_csv(file: &str) -> Result<Reader<File>, Box<dyn Error>> {
     Ok(csv::Reader::from_path(file)?)
 }
+
+
+fn merge_maps_updated(
+    people_data: DashMap<NaiveDateTime, Vec<SensedPeople>>,
+    sensor_data: DashMap<NaiveDateTime, Vec<Sensor>>,
+) -> DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
+    let merged: DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>> = DashMap::new();
+    
+    for sensor_ref in sensor_data.iter() {
+        let current_sensors_minute = sensor_ref.key();
+        let current_sensors_minute_values = sensor_ref.value();
+        let current_minute_sensed_people_ref = people_data.get(current_sensors_minute);
+        
+        for sensor in current_sensors_minute_values.iter() {
+            let current_minute_sensed_people = match current_minute_sensed_people_ref {
+                Some(ref p) => Some(p.value().clone()),
+                // will trigger for first sensor each minute
+                None => None,
+            };
+
+            let current_minute_sensed_people_for_current_sensor = match current_minute_sensed_people {
+                Some(p) => p.iter().filter(|s| s.sensor_location == sensor.location).nth(0).cloned(),
+                None => None,
+            };
+
+            let people = match current_minute_sensed_people_for_current_sensor {
+                Some(p) => p.clone(),
+                None => SensedPeople {
+                    sensor_location: sensor.location.clone(),
+                    people: 0,
+                },
+            };
+
+            let mut entry = merged
+                .entry(people.sensor_location.clone())
+                .or_insert_with(Vec::new);
+            // Add the merged record to the entry
+            entry.push((
+                *current_sensors_minute, // time
+                sensor.clone(), // sensor data
+                people, // people data
+            ));
+        }
+    }
+    merged
+}
 fn merge_maps(
     people_data: DashMap<NaiveDateTime, Vec<SensedPeople>>,
     sensor_data: DashMap<NaiveDateTime, Vec<Sensor>>,
@@ -379,7 +425,7 @@ fn merge_maps(
             if time.hour() < 4 || time.hour() >= 16 {
                 continue;
             }
-            // If there are any people recorded for any sensor at this minute
+            // If there are any people recorded for this sensor at this minute
             if let Some(people_ref_multi) = &people_ref_multi {
                 // We'll keep track of whether we've found a SensedPeople struct for the current location
                 let mut people_present = false;
@@ -797,7 +843,7 @@ fn main() {
     println!("Parsing from file: {:.2?}", elapsed);
     let resturcture = Instant::now();
 
-    let merged_data = merge_maps(location_data, sensor_data);
+    let merged_data = merge_maps_updated(location_data, sensor_data);
     merged_data.remove(&SensorLocation::Jedilnica);
     merged_data.remove(&SensorLocation::Hodnik);
     merged_data.remove(&SensorLocation::Zbornica);
