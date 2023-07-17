@@ -12,7 +12,7 @@ use dashmap::DashMap;
 use serde_pickle as pickle;
 
 static FOLDS: i32 = 10;
-static WINDOW_SIZE: usize = 300;
+static WINDOW_SIZE: usize = 180;
 const SEED: [u8; 32] = [42; 32];
 
 
