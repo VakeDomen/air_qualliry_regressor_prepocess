@@ -96,6 +96,26 @@ pub struct SensedPeople {
     sensor_location: SensorLocation,
     people: i32,
 }
+
+pub struct StandardScaler {
+    mean: f32,
+    std_dev: f32,
+}
+
+impl StandardScaler {
+    pub fn new(data: &[f32]) -> Self {
+        let mean = data.iter().sum::<f32>() / (data.len() as f32);
+        let var = data.iter().map(|&value| (value - mean).powi(2)).sum::<f32>() / (data.len() as f32);
+        let std_dev = var.sqrt();
+        
+        StandardScaler { mean, std_dev }
+    }
+
+    pub fn transform(&self, value: f32) -> f32 {
+        (value - self.mean) / self.std_dev
+    }
+}
+
 impl SensedPeople {
     pub fn from(
         date: Option<&str>,
@@ -617,7 +637,7 @@ fn structure_data(
     data
 }
 
-fn restructure_data_to_target_rows(
+fn restructure_data_to_output(
     data: HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>>>,
 ) -> Vec<Vec<TargetRow>> {
     let mut window_id = 1;
@@ -805,6 +825,57 @@ fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>>
         })
 }
 
+pub fn scale_sensor_data(data: &DashMap<NaiveDateTime, Vec<Sensor>>) -> DashMap<NaiveDateTime, Vec<Sensor>> {
+    let mut scaled_data = DashMap::new();
+    
+    let sensors: Vec<Sensor> = data.iter().flat_map(|item| item.value().clone()).collect();
+
+    let dew_point_scaler = StandardScaler::new(
+        sensors.iter().filter_map(|sensor| sensor.dew_point).collect::<Vec<_>>().as_slice()
+    );
+    let luminance_scaler = StandardScaler::new(
+        sensors.iter().filter_map(|sensor| sensor.luminance).collect::<Vec<_>>().as_slice()
+    );
+    let voc_index_scaler = StandardScaler::new(
+        sensors.iter().filter_map(|sensor| sensor.voc_index).collect::<Vec<_>>().as_slice()
+    );
+    let co2_scaler = StandardScaler::new(
+        sensors.iter().filter_map(|sensor| sensor.co2).collect::<Vec<_>>().as_slice()
+    );
+    let abs_humidity_scaler = StandardScaler::new(
+        sensors.iter().filter_map(|sensor| sensor.abs_humidity).collect::<Vec<_>>().as_slice()
+    );
+    let temperature_scaler = StandardScaler::new(
+        sensors.iter().filter_map(|sensor| sensor.temperature).collect::<Vec<_>>().as_slice()
+    );
+    let vec_eq_co2_scaler = StandardScaler::new(
+        sensors.iter().filter_map(|sensor| sensor.vec_eq_co2).collect::<Vec<_>>().as_slice()
+    );
+
+    for item in data.iter() {
+        let date_time = item.key().clone();
+        let sensors = item.value().clone();
+
+        let scaled_sensors = sensors.into_iter().map(|sensor| {
+            Sensor {
+                location: sensor.location.clone(),
+                dew_point: sensor.dew_point.map(|value| dew_point_scaler.transform(value)),
+                luminance: sensor.luminance.map(|value| luminance_scaler.transform(value)),
+                voc_index: sensor.voc_index.map(|value| voc_index_scaler.transform(value)),
+                co2: sensor.co2.map(|value| co2_scaler.transform(value)),
+                abs_humidity: sensor.abs_humidity.map(|value| abs_humidity_scaler.transform(value)),
+                rh: sensor.rh,  // Not scaling RH as it's already bounded between 0 and 100
+                temperature: sensor.temperature.map(|value| temperature_scaler.transform(value)),
+                vec_eq_co2: sensor.vec_eq_co2.map(|value| vec_eq_co2_scaler.transform(value)),
+            }
+        }).collect();
+
+        scaled_data.insert(date_time, scaled_sensors);
+    }
+    
+    scaled_data
+}
+
 fn main() {
     
     let now = Instant::now();
@@ -843,6 +914,8 @@ fn main() {
         sensor_data.insert(val_ref.0, val_ref.1);
     }
 
+    let sensor_data = scale_sensor_data(&sensor_data);
+
     let elapsed = now.elapsed();
     println!("Parsing from file: {:.2?}", elapsed);
     let resturcture = Instant::now();
@@ -853,7 +926,7 @@ fn main() {
     merged_data.remove(&SensorLocation::Zbornica);
 
     let data = structure_data(merged_data);
-    let data = restructure_data_to_target_rows(data);
+    let data = restructure_data_to_output(data);
     
     let data: Vec<Vec<Vec<TargetRow>>> = shuffle_and_split_into_folds(data, FOLDS); 
     
