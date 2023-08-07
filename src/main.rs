@@ -296,7 +296,7 @@ fn parse_sensor_data(reader: Reader<File>) -> Result<DashMap<NaiveDateTime, Vec<
         ) {
             Ok(r) => r,
             Err(e) => {
-                println!("error parsing row: {:#?}", e);
+                println!("error parsing sensor row: {:#?}", e);
                 return;
             },
         };
