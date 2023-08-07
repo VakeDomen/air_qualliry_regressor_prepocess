@@ -1,24 +1,20 @@
-use std::{error::Error, fs::{File, self}, sync::{Mutex, mpsc::channel}, collections::HashMap, ops::Add, path::Path, io::BufWriter};
+use std::{error::Error, fs::{File, self}, sync::Mutex, collections::HashMap, ops::Add, path::Path};
 
 use chrono::{NaiveDateTime, Timelike, Duration, NaiveDate, NaiveTime, Datelike};
 use csv::Reader;
 use once_cell::sync::Lazy;
-use pickle::SerOptions;
 use rand::{seq::SliceRandom, rngs::StdRng, SeedableRng};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::time::Instant;
 use dashmap::DashMap;
-use serde_pickle as pickle;
 
 static FOLDS: i32 = 10;
-static WINDOW_SIZE: usize = 180;
+static START_HOUR: u32 = 3;
+static END_HOUR: u32 = 16;
+static WINDOW_SIZE: usize = 240;
 const SEED: [u8; 32] = [42; 32];
 
-
-static LOCATION_DATA: Lazy<Mutex<HashMap<SensorLocation, Vec<SensedPeople>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-
-static  DATA: Lazy<Mutex<HashMap<SensorLocation, Vec<TargetRow>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug)]
 pub struct SensorData {
@@ -446,7 +442,7 @@ fn merge_maps(
             // Save the time
             let time = sensor_ref_multi.key();
             // Only collect data from 4am to 4pm
-            if time.hour() < 4 || time.hour() >= 16 {
+            if time.hour() < START_HOUR || time.hour() >= END_HOUR {
                 continue;
             }
             // If there are any people recorded for this sensor at this minute
