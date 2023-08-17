@@ -746,7 +746,7 @@ fn restructure_data_to_output(
                             nov: if date.month() == 11 {1.} else {0.},
                             dec: if date.month() == 12 {1.} else {0.},
                             day: date.day() as f32,
-                            time: ndt.num_seconds_from_midnight() as f32,
+                            time: (ndt.num_seconds_from_midnight() / 60) as f32,
                             dew_point: sensor.dew_point.unwrap_or_default(),
                             luminance: sensor.luminance.unwrap_or_default(),
                             voc_index: sensor.voc_index.unwrap_or_default(),
