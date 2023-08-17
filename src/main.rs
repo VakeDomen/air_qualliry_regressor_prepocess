@@ -84,7 +84,6 @@ pub struct TargetRow {
     rh: f32,
     temperature: f32,
     vec_eq_co2: f32,
-    people: f32,
     outside_temperature: f32,
     avg_temperature: f32,
     min_temperature: f32,
@@ -95,6 +94,7 @@ pub struct TargetRow {
     max_rel_humidity: f32,
     precipitation: f32,
     wind_speed: f32,
+    people: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -755,7 +755,6 @@ fn restructure_data_to_output(
                             rh: sensor.rh.unwrap_or_default(),
                             temperature: sensor.temperature.unwrap_or_default(),
                             vec_eq_co2: sensor.vec_eq_co2.unwrap_or_default(),
-                            people: sensed_people.people as f32,
                             outside_temperature: weather.temperature,
                             avg_temperature: weather.avg_temperature,
                             min_temperature: weather.min_temperature,
@@ -766,6 +765,7 @@ fn restructure_data_to_output(
                             max_rel_humidity: weather.max_rel_humidity,
                             precipitation: weather.precipitation,
                             wind_speed: weather.wind_speed,
+                            people: sensed_people.people as f32,
                         }
                     })
                     .collect();
