@@ -1,5 +1,7 @@
-use std::{error::Error, fs::{File, self}, sync::Mutex, collections::HashMap, ops::Add, path::Path};
+mod scalers;
 
+use std::{error::Error, fs::{File, self}, sync::Mutex, collections::HashMap, ops::Add, path::Path};
+use crate::scalers::robust_scaler::RobustScaler;
 use chrono::{NaiveDateTime, Timelike, Duration, NaiveDate, NaiveTime, Datelike};
 use csv::Reader;
 use once_cell::sync::Lazy;
@@ -8,6 +10,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::time::Instant;
 use dashmap::DashMap;
+
 
 static FOLDS: i32 = 10;
 static START_HOUR: u32 = 3;
@@ -117,24 +120,6 @@ pub struct WeatherPoint {
     pub wind_speed: f32,
 }
 
-pub struct StandardScaler {
-    mean: f32,
-    std_dev: f32,
-}
-
-impl StandardScaler {
-    pub fn new(data: &[f32]) -> Self {
-        let mean = data.iter().sum::<f32>() / (data.len() as f32);
-        let var = data.iter().map(|&value| (value - mean).powi(2)).sum::<f32>() / (data.len() as f32);
-        let std_dev = var.sqrt();
-        
-        StandardScaler { mean, std_dev }
-    }
-
-    pub fn transform(&self, value: f32) -> f32 {
-        (value - self.mean) / self.std_dev
-    }
-}
 
 impl SensedPeople {
     pub fn from(
@@ -897,25 +882,25 @@ pub fn scale_sensor_data(data: &DashMap<NaiveDateTime, Vec<Sensor>>) -> DashMap<
     
     let sensors: Vec<Sensor> = data.iter().flat_map(|item| item.value().clone()).collect();
 
-    let dew_point_scaler = StandardScaler::new(
+    let dew_point_scaler = RobustScaler::new(
         sensors.iter().filter_map(|sensor| sensor.dew_point).collect::<Vec<_>>().as_slice()
     );
-    let luminance_scaler = StandardScaler::new(
+    let luminance_scaler = RobustScaler::new(
         sensors.iter().filter_map(|sensor| sensor.luminance).collect::<Vec<_>>().as_slice()
     );
-    let voc_index_scaler = StandardScaler::new(
+    let voc_index_scaler = RobustScaler::new(
         sensors.iter().filter_map(|sensor| sensor.voc_index).collect::<Vec<_>>().as_slice()
     );
-    let co2_scaler = StandardScaler::new(
+    let co2_scaler = RobustScaler::new(
         sensors.iter().filter_map(|sensor| sensor.co2).collect::<Vec<_>>().as_slice()
     );
-    let abs_humidity_scaler = StandardScaler::new(
+    let abs_humidity_scaler = RobustScaler::new(
         sensors.iter().filter_map(|sensor| sensor.abs_humidity).collect::<Vec<_>>().as_slice()
     );
-    let temperature_scaler = StandardScaler::new(
+    let temperature_scaler = RobustScaler::new(
         sensors.iter().filter_map(|sensor| sensor.temperature).collect::<Vec<_>>().as_slice()
     );
-    let vec_eq_co2_scaler = StandardScaler::new(
+    let vec_eq_co2_scaler = RobustScaler::new(
         sensors.iter().filter_map(|sensor| sensor.vec_eq_co2).collect::<Vec<_>>().as_slice()
     );
 
@@ -946,34 +931,34 @@ pub fn scale_sensor_data(data: &DashMap<NaiveDateTime, Vec<Sensor>>) -> DashMap<
 pub fn scale_weather_data(data: &DashMap<NaiveDateTime, WeatherPoint>) -> DashMap<NaiveDateTime, WeatherPoint> {
     let mut scaled_data = DashMap::new();
     
-    let temperature_scaler = StandardScaler::new(
+    let temperature_scaler = RobustScaler::new(
         data.iter().map(|w| w.temperature).collect::<Vec<_>>().as_slice()
     );
-    let avg_temperature_scaler = StandardScaler::new(
+    let avg_temperature_scaler = RobustScaler::new(
         data.iter().map(|w| w.avg_temperature).collect::<Vec<_>>().as_slice()
     );
-    let min_temperature_scaler = StandardScaler::new(
+    let min_temperature_scaler = RobustScaler::new(
         data.iter().map(|w| w.min_temperature).collect::<Vec<_>>().as_slice()
     );
-    let max_temperature_scaler = StandardScaler::new(
+    let max_temperature_scaler = RobustScaler::new(
         data.iter().map(|w| w.max_temperature).collect::<Vec<_>>().as_slice()
     );
-    let rel_humidity_scaler = StandardScaler::new(
+    let rel_humidity_scaler = RobustScaler::new(
         data.iter().map(|w| w.rel_humidity).collect::<Vec<_>>().as_slice()
     );
-    let avg_rel_humidity_scaler = StandardScaler::new(
+    let avg_rel_humidity_scaler = RobustScaler::new(
         data.iter().map(|w| w.avg_rel_humidity).collect::<Vec<_>>().as_slice()
     );
-    let min_rel_humidity_scaler = StandardScaler::new(
+    let min_rel_humidity_scaler = RobustScaler::new(
         data.iter().map(|w| w.min_rel_humidity).collect::<Vec<_>>().as_slice()
     );
-    let max_rel_humidity_scaler = StandardScaler::new(
+    let max_rel_humidity_scaler = RobustScaler::new(
         data.iter().map(|w| w.max_rel_humidity).collect::<Vec<_>>().as_slice()
     );
-    let precipitation_scaler = StandardScaler::new(
+    let precipitation_scaler = RobustScaler::new(
         data.iter().map(|w| w.precipitation).collect::<Vec<_>>().as_slice()
     );
-    let wind_speed_scaler = StandardScaler::new(
+    let wind_speed_scaler = RobustScaler::new(
         data.iter().map(|w| w.wind_speed).collect::<Vec<_>>().as_slice()
     );
     
