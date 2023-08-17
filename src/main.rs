@@ -12,7 +12,7 @@ use dashmap::DashMap;
 static FOLDS: i32 = 10;
 static START_HOUR: u32 = 3;
 static END_HOUR: u32 = 16;
-static WINDOW_SIZE: usize = 240;
+static WINDOW_SIZE: usize = 180;
 const SEED: [u8; 32] = [42; 32];
 
 
@@ -85,12 +85,36 @@ pub struct TargetRow {
     temperature: f32,
     vec_eq_co2: f32,
     people: f32,
+    outside_temperature: f32,
+    avg_temperature: f32,
+    min_temperature: f32,
+    max_temperature: f32,
+    rel_humidity: f32,
+    avg_rel_humidity: f32,
+    min_rel_humidity: f32,
+    max_rel_humidity: f32,
+    precipitation: f32,
+    wind_speed: f32,
 }
 
 #[derive(Debug, Clone)]
 pub struct SensedPeople {
     sensor_location: SensorLocation,
     people: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct WeatherPoint {
+    pub temperature: f32,
+    pub avg_temperature: f32,
+    pub min_temperature: f32,
+    pub max_temperature: f32,
+    pub rel_humidity: f32,
+    pub avg_rel_humidity: f32,
+    pub min_rel_humidity: f32,
+    pub max_rel_humidity: f32,
+    pub precipitation: f32,
+    pub wind_speed: f32,
 }
 
 pub struct StandardScaler {
@@ -335,6 +359,61 @@ fn parse_sensor_data(reader: Reader<File>) -> Result<DashMap<NaiveDateTime, Vec<
 
 }
 
+fn parse_weather_data(reader: Reader<File>) -> Result<DashMap<NaiveDateTime, WeatherPoint>, Box<dyn Error>> {
+    let mut records = reader.into_records();
+    let data: DashMap<NaiveDateTime, WeatherPoint> = DashMap::new();
+    let mut prev_record: Option<(NaiveDateTime, WeatherPoint)> = None;
+
+    for result in records.skip(1) {
+        let record = result?;
+        let timestamp = NaiveDateTime::parse_from_str(record.get(2).unwrap_or_default(), "%Y-%m-%d %H:%M")?;
+        let weather_point = WeatherPoint {
+            temperature: record.get(3).unwrap_or_default().parse::<f32>()?,
+            avg_temperature: record.get(4).unwrap_or_default().parse::<f32>()?,
+            min_temperature: record.get(5).unwrap_or_default().parse::<f32>()?,
+            max_temperature: record.get(6).unwrap_or_default().parse::<f32>()?,
+            rel_humidity: record.get(7).unwrap_or_default().parse::<f32>()?,
+            avg_rel_humidity: record.get(8).unwrap_or_default().parse::<f32>()?,
+            min_rel_humidity: record.get(9).unwrap_or_default().parse::<f32>()?,
+            max_rel_humidity: record.get(10).unwrap_or_default().parse::<f32>()?,
+            precipitation: record.get(11).unwrap_or_default().parse::<f32>()?,
+            wind_speed: record.get(12).unwrap_or_default().parse::<f32>()?,
+        };
+        
+        if let Some((prev_time, prev_data)) = &prev_record {
+            let duration = timestamp - *prev_time;
+            let minutes = duration.num_minutes();
+            
+            for i in 1..minutes {
+                let fraction = i as f32 / minutes as f32;
+                let interp_time = *prev_time + chrono::Duration::minutes(i);
+                let interp_point = interpolate_weather_points(&prev_data, &weather_point, fraction);
+                data.insert(interp_time, interp_point);
+            }
+        }
+
+        data.insert(timestamp, weather_point.clone());
+        prev_record = Some((timestamp, weather_point));
+    }
+
+    Ok(data)
+}
+
+fn interpolate_weather_points(a: &WeatherPoint, b: &WeatherPoint, fraction: f32) -> WeatherPoint {
+    WeatherPoint {
+        temperature: a.temperature + fraction * (b.temperature - a.temperature),
+        avg_temperature: a.avg_temperature + fraction * (b.avg_temperature - a.avg_temperature),
+        min_temperature: a.min_temperature + fraction * (b.min_temperature - a.min_temperature),
+        max_temperature: a.max_temperature + fraction * (b.max_temperature - a.max_temperature),
+        rel_humidity: a.rel_humidity + fraction * (b.rel_humidity - a.rel_humidity),
+        avg_rel_humidity: a.avg_rel_humidity + fraction * (b.avg_rel_humidity - a.avg_rel_humidity),
+        min_rel_humidity: a.min_rel_humidity + fraction * (b.min_rel_humidity - a.min_rel_humidity),
+        max_rel_humidity: a.max_rel_humidity + fraction * (b.max_rel_humidity - a.max_rel_humidity),
+        precipitation: a.precipitation + fraction * (b.precipitation - a.precipitation),
+        wind_speed: a.wind_speed + fraction * (b.wind_speed - a.wind_speed),
+    }
+}
+
 fn parse_location_data(reader: Reader<File>) -> Result<DashMap<NaiveDateTime, Vec<SensedPeople>>, Box<dyn Error>> {
     let data = DashMap::new();
     
@@ -382,14 +461,18 @@ fn read_csv(file: &str) -> Result<Reader<File>, Box<dyn Error>> {
 fn merge_maps_updated(
     people_data: DashMap<NaiveDateTime, Vec<SensedPeople>>,
     sensor_data: DashMap<NaiveDateTime, Vec<Sensor>>,
-) -> DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
-    let merged: DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>> = DashMap::new();
+    weather_data: DashMap<NaiveDateTime, WeatherPoint>,
+) -> DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>> {
+    let merged: DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>> = DashMap::new();
     
     for sensor_ref in sensor_data.iter() {
         let current_sensors_minute = sensor_ref.key();
         let current_sensors_minute_values = sensor_ref.value();
         let current_minute_sensed_people_ref = people_data.get(current_sensors_minute);
-        
+        let current_weather_data = match weather_data.get(current_sensors_minute) {
+            Some(d) => d.value().clone(),
+            None => continue,
+        };
         if current_sensors_minute.hour() < 4 || current_sensors_minute.hour() >= 16 {
             continue;
         }
@@ -422,6 +505,7 @@ fn merge_maps_updated(
                 *current_sensors_minute, // time
                 sensor.clone(), // sensor data
                 people, // people data
+                current_weather_data.clone(),
             ));
         }
     }
@@ -510,20 +594,20 @@ fn merge_maps(
 
 
 fn get_sorted_data_for_location(
-    data: &DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>>,
+    data: &DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>,
     location: &SensorLocation,
-) -> Option<Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
+) -> Option<Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>> {
     data.get(location).map(|multi_ref| {
         let mut sorted_data = multi_ref.value().clone();
-        sorted_data.sort_unstable_by_key(|(date, _, _)| *date);
+        sorted_data.sort_unstable_by_key(|(date, _, _, _)| *date);
         sorted_data
     })
 }
 
 fn aggregate_by_date(
-    data: Vec<(NaiveDateTime, Sensor, SensedPeople)>,
-) -> HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
-    let mut aggregated: HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>> = HashMap::new();
+    data: Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>,
+) -> HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>> {
+    let mut aggregated: HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>> = HashMap::new();
     
     for tuple in data {
         let date = tuple.0.date();  // extract the date part of the NaiveDateTime
@@ -534,7 +618,7 @@ fn aggregate_by_date(
 }
 
 fn find_gaps(
-    data: &HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>>,
+    data: &HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>,
 ) -> HashMap<NaiveDate, Vec<(NaiveTime, NaiveTime)>> {
     let mut gaps: HashMap<NaiveDate, Vec<(NaiveTime, NaiveTime)>> = HashMap::new();
     
@@ -545,7 +629,7 @@ fn find_gaps(
     for (&date, tuples) in data {
         let mut last_time = start_time;
         
-        for &(time, _, _) in tuples {
+        for &(time, _, _, _) in tuples {
             let expected_time = last_time + duration;
             
             // Check if a gap exists between the expected time and the actual time
@@ -571,8 +655,8 @@ fn find_gaps(
 }
 
 fn filter_days_by_gaps(
-    mut days: HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>>, 
-) -> HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>> {
+    mut days: HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>, 
+) -> HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>> {
     let gaps = find_gaps(&days);
     for (date, gaps_day) in gaps.iter() {
         // println!("Day: {} - gaps {:#?}", date, gaps_day);
@@ -588,10 +672,10 @@ fn filter_days_by_gaps(
 }
 
 fn generate_windows(
-    data: &HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople)>>, 
+    data: &HashMap<NaiveDate, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>, 
     window_size: usize
-) -> HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>> {
-    let mut windowed_data: HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>> = HashMap::new();
+) -> HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>> {
+    let mut windowed_data: HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>> = HashMap::new();
 
     for (&date, tuples) in data {
         let mut windows = Vec::new();
@@ -605,10 +689,10 @@ fn generate_windows(
 }
 
 fn structure_data(
-    merged_data: DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople)>>
-) ->  HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>>> {
+    merged_data: DashMap<SensorLocation, Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>
+) ->  HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>>> {
     // define a hashmap to hold all the data
-    let mut data: HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>>> = HashMap::new();
+    let mut data: HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>>> = HashMap::new();
 
     // loop over all locations
     for ref_location in merged_data.iter() {
@@ -634,7 +718,7 @@ fn structure_data(
 }
 
 fn restructure_data_to_output(
-    data: HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople)>>>>,
+    data: HashMap<SensorLocation, HashMap<NaiveDate, Vec<Vec<(NaiveDateTime, Sensor, SensedPeople, WeatherPoint)>>>>,
 ) -> Vec<Vec<TargetRow>> {
     let mut window_id = 1;
     let mut result: Vec<Vec<TargetRow>> = Vec::new();
@@ -646,7 +730,7 @@ fn restructure_data_to_output(
             for (_, window) in windows.into_iter().enumerate() {
                 let window_rows: Vec<TargetRow> = window
                     .into_iter()
-                    .map(|(ndt, sensor, sensed_people)| {
+                    .map(|(ndt, sensor, sensed_people, weather)| {
                         TargetRow {
                             window_id: window_id as i32,
                             jan: if date.month() == 1 {1.} else {0.},
@@ -672,6 +756,16 @@ fn restructure_data_to_output(
                             temperature: sensor.temperature.unwrap_or_default(),
                             vec_eq_co2: sensor.vec_eq_co2.unwrap_or_default(),
                             people: sensed_people.people as f32,
+                            outside_temperature: weather.temperature,
+                            avg_temperature: weather.avg_temperature,
+                            min_temperature: weather.min_temperature,
+                            max_temperature: weather.max_temperature,
+                            rel_humidity: weather.rel_humidity,
+                            avg_rel_humidity: weather.avg_rel_humidity,
+                            min_rel_humidity: weather.min_rel_humidity,
+                            max_rel_humidity: weather.max_rel_humidity,
+                            precipitation: weather.precipitation,
+                            wind_speed: weather.wind_speed,
                         }
                     })
                     .collect();
@@ -723,29 +817,6 @@ fn export_fold(data: Vec<TargetRow>, file: File) -> std::io::Result<()> {
 
     writer.flush()
 }
-
-// fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<dyn Error>> {
-//     // Channel for error handling
-//     let (tx, rx) = channel();
-
-//     folded_data.into_par_iter().enumerate().for_each_with(tx, |tx, (i, fold)| {
-//         // Flatten the Vec<Vec<TargetRow>> into Vec<TargetRow>
-//         let flattened: Vec<_> = fold.iter().flat_map(|x| x.iter()).collect();
-
-//         let filename = format!("fold_{}.csv", i + 1);
-//         if let Err(e) = export_fold(&flattened, &filename) {
-//             tx.send(e).expect("Channel send failed");
-//         }
-//     });
-
-//     // Check if any threads encountered an error
-//     match rx.try_recv() {
-//         Ok(err) => Err(Box::new(err)),
-//         Err(RecvError) => Ok(()),
-//         _ => Ok(()),
-//     }
-// }
-
 
 fn export_data(folded_data: Vec<Vec<Vec<TargetRow>>>) -> Result<(), Box<String>> {
     let dash_data: DashMap<usize, Vec<Vec<TargetRow>>> = DashMap::new();
@@ -872,56 +943,87 @@ pub fn scale_sensor_data(data: &DashMap<NaiveDateTime, Vec<Sensor>>) -> DashMap<
     scaled_data
 }
 
+pub fn scale_weather_data(data: &DashMap<NaiveDateTime, WeatherPoint>) -> DashMap<NaiveDateTime, WeatherPoint> {
+    let mut scaled_data = DashMap::new();
+    
+    let temperature_scaler = StandardScaler::new(
+        data.iter().map(|w| w.temperature).collect::<Vec<_>>().as_slice()
+    );
+    let avg_temperature_scaler = StandardScaler::new(
+        data.iter().map(|w| w.avg_temperature).collect::<Vec<_>>().as_slice()
+    );
+    let min_temperature_scaler = StandardScaler::new(
+        data.iter().map(|w| w.min_temperature).collect::<Vec<_>>().as_slice()
+    );
+    let max_temperature_scaler = StandardScaler::new(
+        data.iter().map(|w| w.max_temperature).collect::<Vec<_>>().as_slice()
+    );
+    let rel_humidity_scaler = StandardScaler::new(
+        data.iter().map(|w| w.rel_humidity).collect::<Vec<_>>().as_slice()
+    );
+    let avg_rel_humidity_scaler = StandardScaler::new(
+        data.iter().map(|w| w.avg_rel_humidity).collect::<Vec<_>>().as_slice()
+    );
+    let min_rel_humidity_scaler = StandardScaler::new(
+        data.iter().map(|w| w.min_rel_humidity).collect::<Vec<_>>().as_slice()
+    );
+    let max_rel_humidity_scaler = StandardScaler::new(
+        data.iter().map(|w| w.max_rel_humidity).collect::<Vec<_>>().as_slice()
+    );
+    let precipitation_scaler = StandardScaler::new(
+        data.iter().map(|w| w.precipitation).collect::<Vec<_>>().as_slice()
+    );
+    let wind_speed_scaler = StandardScaler::new(
+        data.iter().map(|w| w.wind_speed).collect::<Vec<_>>().as_slice()
+    );
+    
+
+    for item in data.iter() {
+
+        let date_time = item.key().clone();
+        let sensor = item.value().clone();
+
+        
+        let scaled_sensor = WeatherPoint {
+            temperature: temperature_scaler.transform(sensor.temperature),
+            avg_temperature: avg_temperature_scaler.transform(sensor.avg_temperature),
+            min_temperature: min_temperature_scaler.transform(sensor.min_temperature),
+            max_temperature: max_temperature_scaler.transform(sensor.max_temperature),
+            rel_humidity: rel_humidity_scaler.transform(sensor.rel_humidity),
+            avg_rel_humidity: avg_rel_humidity_scaler.transform(sensor.avg_rel_humidity),
+            min_rel_humidity: min_rel_humidity_scaler.transform(sensor.min_rel_humidity),
+            max_rel_humidity: max_rel_humidity_scaler.transform(sensor.max_rel_humidity),
+            precipitation: precipitation_scaler.transform(sensor.precipitation),
+            wind_speed: wind_speed_scaler.transform(sensor.wind_speed),
+        };
+
+        scaled_data.insert(date_time, scaled_sensor);
+    }
+    
+    scaled_data
+}
+
+
+
 fn main() {
     
     let now = Instant::now();
-    let sensor_reader_1 = match read_csv("data/jan_feb_mar_ajdovscina_iaq.csv") {
-        Ok(r) => r,
-        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
-    };
-
-    let sensor_reader_2 = match read_csv("data/apr_maj_jun_ajdovscina_iaq.csv") {
-        Ok(r) => r,
-        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
-    };
-
-
-    let location_data_reader = match read_csv("data/school_data.csv") {
-        Ok(r) => r,
-        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
-    };
-
-    let location_data = match parse_location_data(location_data_reader) {
-        Ok(r) => r,
-        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
-    };
-
-    let sensor_data = match parse_sensor_data(sensor_reader_1) {
-        Ok(r) => r,
-        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
-    };
-
-    let sensor_data_2 = match parse_sensor_data(sensor_reader_2) {
-        Ok(r) => r,
-        Err(e) => return println!("Something went worng reading csv: {:#?}", e),
-    };
-
-    for val_ref in sensor_data_2.into_iter() {
-        sensor_data.insert(val_ref.0, val_ref.1);
-    }
+    let (sensor_reader_1, sensor_reader_2, location_data_reader, weather_data_reader_1, weather_data_reader_2) = get_readers();
+    let (sensor_data, location_data, weather_data) = get_data(sensor_reader_1, sensor_reader_2, location_data_reader, weather_data_reader_1, weather_data_reader_2);
 
     let sensor_data = scale_sensor_data(&sensor_data);
+    let weather_data = scale_weather_data(&weather_data);
 
     let elapsed = now.elapsed();
     println!("Parsing from file: {:.2?}", elapsed);
     let resturcture = Instant::now();
 
-    let merged_data = merge_maps_updated(location_data, sensor_data);
-    merged_data.remove(&SensorLocation::Jedilnica);
-    merged_data.remove(&SensorLocation::Hodnik);
-    merged_data.remove(&SensorLocation::Zbornica);
+    let data = merge_maps_updated(location_data, sensor_data, weather_data);
+    data.remove(&SensorLocation::Jedilnica);
+    data.remove(&SensorLocation::Hodnik);
+    data.remove(&SensorLocation::Zbornica);
 
-    let data = structure_data(merged_data);
+    let data = structure_data(data);
     let data = restructure_data_to_output(data);
     
     let data: Vec<Vec<Vec<TargetRow>>> = shuffle_and_split_into_folds(data, FOLDS); 
@@ -941,3 +1043,78 @@ fn main() {
     println!("Total: {:.2?}", elapsed);
 }
 
+fn get_readers() -> (Reader<File>, Reader<File>, Reader<File>, Reader<File>, Reader<File>) {
+    let sensor_reader_1 = match read_csv("data/jan_feb_mar_ajdovscina_iaq.csv") {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading csv: {:#?}", e),
+    };
+
+    let sensor_reader_2 = match read_csv("data/apr_maj_jun_ajdovscina_iaq.csv") {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading csv: {:#?}", e),
+    };
+
+    let location_data_reader = match read_csv("data/school_data.csv") {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading csv: {:#?}", e),
+    };
+
+    let weather_data_reader_1 = match read_csv("data/vreme_jan_feb_mar.csv") {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading csv: {:#?}", e),
+    };
+
+    let weather_data_reader_2 = match read_csv("data/vreme_apr_maj_jun.csv") {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading csv: {:#?}", e),
+    };
+    (sensor_reader_1, sensor_reader_2, location_data_reader, weather_data_reader_1, weather_data_reader_2)
+}
+
+fn get_data(
+    sensor_reader_1: Reader<File>, 
+    sensor_reader_2: Reader<File>, 
+    location_data_reader: Reader<File>, 
+    weather_data_reader_1: Reader<File>, 
+    weather_data_reader_2: Reader<File>,
+) -> (
+    DashMap<NaiveDateTime, Vec<Sensor>>,
+    DashMap<NaiveDateTime, Vec<SensedPeople>>,
+    DashMap<NaiveDateTime, WeatherPoint>
+) {
+    let weather_data = match parse_weather_data(weather_data_reader_1) {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading weather csv 1: {:#?}", e),
+    };
+
+    let weather_data_2 = match parse_weather_data(weather_data_reader_2) {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading weather csv 2: {:#?}", e),
+    };
+
+
+    let location_data = match parse_location_data(location_data_reader) {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading location csv: {:#?}", e),
+    };
+
+    let sensor_data = match parse_sensor_data(sensor_reader_1) {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading sensor csv 1: {:#?}", e),
+    };
+
+    let sensor_data_2 = match parse_sensor_data(sensor_reader_2) {
+        Ok(r) => r,
+        Err(e) => panic!("Something went worng reading sensor csv 2: {:#?}", e),
+    };
+
+    for val_ref in sensor_data_2.into_iter() {
+        sensor_data.insert(val_ref.0, val_ref.1);
+    }
+
+    for val_ref in weather_data_2.into_iter() {
+        weather_data.insert(val_ref.0, val_ref.1);
+    }
+
+    (sensor_data, location_data, weather_data)
+}
